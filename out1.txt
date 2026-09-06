@@ -1,0 +1,292 @@
+Starting /opt/hp93000/soc/formatter/bin/STDFreader:
+
+  STDF is a trademark of Teradyne, Inc.
+
+Data from file 'FAB9_vt90_02TG200_N36A81GFR1_ENGINEER_SMHT_MODULE_260824-131946.stdf'
+FAR Record
+  CPU_TYPE:      2
+  STDF_VER:      4
+ATR Record
+  MOD_TIME:      1787577662 (24-Aug-2026 13:21:02)
+  CMD_LINE:      dataformatter tester config; Ver: SmarTest s/w rev. 7.6.4.0 (T), 23-Feb-23; dataformatter 2.0.23 Feb 23 2023 07:58:20
+MIR Record
+  SETUP_T:       1787577631 (24-Aug-2026 13:20:31)
+  START_T:       1787577662 (24-Aug-2026 13:21:02)
+  STAT_NUM:      1
+  MODE_COD:      'E'
+  RTST_COD:      'N'
+  PROT_COD:      'N'
+  BURN_TIM:      65535
+  CMOD_COD:      ' '
+  LOT_ID:        N36A81GFR1
+  NODE_NAM:      vt90
+  TSTR_TYP:      93000-SOC
+  JOB_NAM:       /test/production/MTSG.01.00002TG186.MCHRR01M04/TP_TX/testprog/BTV_TXV5B_PROD_MC_MODULE_HT
+  JOB_REV:       MCHRR01M04
+  OPER_NAM:      gfoper
+  EXEC_TYP:      93000
+  EXEC_VER:      s/w rev. 7.6.4.0 (T), 23-Feb-23
+  TEST_COD:      SMHT
+  TST_TEMP:      125.000000
+  USER_TXT:      ARBE TXV5B SKEW MC PRODUCTION
+  FAMLY_ID:      PR
+  PROC_ID:       A2
+  SPEC_NAM:      7186
+  SPEC_VER:      1
+  FLOW_ID:       ENGINEER
+  DSGN_REV:      DD2
+SDR Record
+  HEAD_NUM:      1
+  SITE_GRP:      2
+  SITE_CNT:      1
+  SITE_NUM:      1
+  HAND_TYP:      DAYMARC
+PMR Record
+  PMR_INDX:      1
+  CHAN_TYP:      0
+  CHAN_NAM:      ALM0
+  PHY_NAM:       10101
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      2
+  CHAN_TYP:      0
+  CHAN_NAM:      ALM1
+  PHY_NAM:       10113
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      3
+  CHAN_TYP:      0
+  CHAN_NAM:      DTB0
+  PHY_NAM:       11302
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      4
+  CHAN_TYP:      0
+  CHAN_NAM:      DTB1
+  PHY_NAM:       10103
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      5
+  CHAN_TYP:      0
+  CHAN_NAM:      FS
+  PHY_NAM:       11308
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      6
+  CHAN_TYP:      0
+  CHAN_NAM:      ATB
+  PHY_NAM:       10111
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      7
+  CHAN_TYP:      0
+  CHAN_NAM:      RSTN
+  PHY_NAM:       11306
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      8
+  CHAN_TYP:      0
+  CHAN_NAM:      SCLK
+  PHY_NAM:       11313
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      9
+  CHAN_TYP:      0
+  CHAN_NAM:      SCS
+  PHY_NAM:       11316
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      10
+  CHAN_TYP:      0
+  CHAN_NAM:      SMISO
+  PHY_NAM:       11303
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      11
+  CHAN_TYP:      0
+  CHAN_NAM:      SMOSI
+  PHY_NAM:       11314
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      12
+  CHAN_TYP:      0
+  CHAN_NAM:      TCK
+  PHY_NAM:       10107
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      13
+  CHAN_TYP:      0
+  CHAN_NAM:      TDI
+  PHY_NAM:       10108
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      14
+  CHAN_TYP:      0
+  CHAN_NAM:      TDO
+  PHY_NAM:       10114
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      15
+  CHAN_TYP:      0
+  CHAN_NAM:      TMS
+  PHY_NAM:       10106
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      16
+  CHAN_TYP:      0
+  CHAN_NAM:      TRSTN
+  PHY_NAM:       10109
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      17
+  CHAN_TYP:      0
+  CHAN_NAM:      REXT
+  PHY_NAM:       10105
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      18
+  CHAN_TYP:      0
+  CHAN_NAM:      REFP
+  PHY_NAM:       11310
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      19
+  CHAN_TYP:      0
+  CHAN_NAM:      REFN
+  PHY_NAM:       11312
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      20
+  CHAN_TYP:      0
+  CHAN_NAM:      AVDDPLLIO
+  PHY_NAM:       22501
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      21
+  CHAN_TYP:      0
+  CHAN_NAM:      VDDPLLC
+  PHY_NAM:       22503
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      22
+  CHAN_TYP:      0
+  CHAN_NAM:      AVDDPLLC
+  PHY_NAM:       22507
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      23
+  CHAN_TYP:      0
+  CHAN_NAM:      VQPS
+  PHY_NAM:       22511
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      24
+  CHAN_TYP:      0
+  CHAN_NAM:      VDDC
+  PHY_NAM:       22901
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      25
+  CHAN_TYP:      0
+  CHAN_NAM:      VDDIO
+  PHY_NAM:       22903
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      26
+  CHAN_TYP:      0
+  CHAN_NAM:      AVDDIO
+  PHY_NAM:       22907
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      27
+  CHAN_TYP:      0
+  CHAN_NAM:      AVDDC
+  PHY_NAM:       22911
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      28
+  CHAN_TYP:      0
+  CHAN_NAM:      AVDDPLLIO
+  PHY_NAM:       22501
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      29
+  CHAN_TYP:      0
+  CHAN_NAM:      VDDPLLC
+  PHY_NAM:       22503
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      30
+  CHAN_TYP:      0
+  CHAN_NAM:      AVDDPLLC
+  PHY_NAM:       22507
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      31
+  CHAN_TYP:      0
+  CHAN_NAM:      VQPS
+  PHY_NAM:       22511
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      32
+  CHAN_TYP:      0
+  CHAN_NAM:      VDDC
+  PHY_NAM:       22901
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      33
+  CHAN_TYP:      0
+  CHAN_NAM:      VDDIO
+  PHY_NAM:       22903
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      34
+  CHAN_TYP:      0
+  CHAN_NAM:      AVDDIO
+  PHY_NAM:       22907
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PMR Record
+  PMR_INDX:      35
+  CHAN_TYP:      0
+  CHAN_NAM:      AVDDC
+  PHY_NAM:       22911
+  HEAD_NUM:      1
+  SITE_NUM:      1
+PIR Record
+  HEAD_NUM:      1
+  SITE_NUM:      1
+End of file. Done!

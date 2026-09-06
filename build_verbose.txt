@@ -1,0 +1,15 @@
+﻿cargo :        Fresh unicode-ident v1.0.24
+At C:\Users\zzhou2\AppData\Local\Temp\1\ps-script-53d022c8-ae57-4f98-8bcc-599535027517.ps1:124 char:1
++ cargo build --release --bin to_ascii --verbose 2>&1 | Out-String -Wid ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (       Fresh unicode-ident v1.0.24:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+       Fresh proc-macro2 v1.0.107
+       Fresh quote v1.0.47
+       Fresh syn v2.0.119
+       Fresh thiserror-impl v1.0.69
+       Fresh thiserror v1.0.69
+       Fresh stdf-parser v0.1.0 (C:\Users\zzhou2\OneDrive - GlobalFoundries\Documents\CursorWorkSpace\zstdf)
+    Finished `release` profile [optimized] target(s) in 1.39s
+

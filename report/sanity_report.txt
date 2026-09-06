@@ -1,0 +1,42 @@
+════════════════════════════════════════════════════════════════════
+  STDF BATCH SANITY REPORT
+════════════════════════════════════════════════════════════════════
+  Generated : 2026-07-21 14:09:46 UTC
+  Root path : \\gfoundries\fab8-prod\dpt_prodstag\stageMFT\in\fab9\STDF_PUBLIC
+  Threads   : 16
+  Duration  : 00:00:01
+
+── AGGREGATE STATISTICS ─────────────────────────────────────────────
+  Files scanned      : 3
+  Total size         : 562.94 MB
+  Total records      : 0
+  Total parts (PRR)  : 0
+  Total PTR tests    : 0
+
+  ✓ Clean            : 0
+  ⚠ Warnings only    : 0
+  ✗ Issues (err/fatal): 0
+  ☒ Unreadable       : 3
+
+══ UNREADABLE FILES (3) — parser could not fully read these ═══════
+
+  FILE: \\gfoundries\fab8-prod\dpt_prodstag\stageMFT\in\fab9\STDF_PUBLIC\vu90~57SQC00000~SWTC~GF0RU109SEE7~03LA230~240826135311.stdf
+    Size    : 497.67 MB
+    Records read before failure: 0
+    Error   : cannot open: Access is denied. (os error 5)
+
+  FILE: \\gfoundries\fab8-prod\dpt_prodstag\stageMFT\in\fab9\STDF_PUBLIC\vu90~57SQC00000~SWTC~GF0RU109SEE7~03LA230~240910102425.stdf
+    Size    : 52.09 MB
+    Records read before failure: 0
+    Error   : cannot open: Access is denied. (os error 5)
+
+  FILE: \\gfoundries\fab8-prod\dpt_prodstag\stageMFT\in\fab9\STDF_PUBLIC\vu90~57SQC00000~SWTC~GF0RU109SEE7~03LA230~240917161310.stdf
+    Size    : 13.17 MB
+    Records read before failure: 0
+    Error   : cannot open: Access is denied. (os error 5)
+
+── CLEAN FILES (0) ──────────────────────────────────────────────────
+
+════════════════════════════════════════════════════════════════════
+  END OF REPORT
+════════════════════════════════════════════════════════════════════
