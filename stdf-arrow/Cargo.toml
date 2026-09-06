@@ -1,0 +1,9 @@
+[package]
+name = "stdf-arrow"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+stdf-core = { path = "../stdf-core" }
+arrow.workspace = true
+thiserror.workspace = true

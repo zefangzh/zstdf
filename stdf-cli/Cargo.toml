@@ -1,0 +1,21 @@
+[package]
+name = "stdf-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "zstdf-cli"
+path = "src/main.rs"
+
+[dependencies]
+stdf-core = { path = "../stdf-core" }
+stdf-io = { path = "../stdf-io" }
+stdf-arrow = { path = "../stdf-arrow" }
+stdf-parquet = { path = "../stdf-parquet" }
+stdf-validate = { path = "../stdf-validate" }
+stdf-ascii = { path = "../stdf-ascii" }
+clap.workspace = true
+arrow.workspace = true
+parquet.workspace = true
+rayon.workspace = true
+

@@ -1,0 +1,19 @@
+[package]
+name = "stdf-py"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "_zstdf"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+stdf-core = { path = "../stdf-core" }
+stdf-io = { path = "../stdf-io" }
+stdf-arrow = { path = "../stdf-arrow" }
+stdf-parquet = { path = "../stdf-parquet" }
+pyo3.workspace = true
+arrow = { workspace = true, features = ["pyarrow"] }
+
+[dev-dependencies]
+parquet.workspace = true

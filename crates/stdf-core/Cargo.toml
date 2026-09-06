@@ -1,0 +1,9 @@
+[package]
+name = "stdf-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure binary decoder for STDF (Standard Test Data Format) v4 semiconductor test data. No I/O assumptions - operates on byte slices so it can be reused from a CLI, a service, or Python bindings."
+
+[lib]
+name = "stdf_core"

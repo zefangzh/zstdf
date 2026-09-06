@@ -1,0 +1,7 @@
+[package]
+name = "stdf-ascii"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+stdf-core = { path = "../stdf-core" }

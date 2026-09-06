@@ -1,0 +1,11 @@
+[package]
+name = "stdf-parquet"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+stdf-core = { path = "../stdf-core" }
+stdf-arrow = { path = "../stdf-arrow" }
+parquet.workspace = true
+arrow.workspace = true
+thiserror.workspace = true

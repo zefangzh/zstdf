@@ -1,0 +1,10 @@
+[package]
+name = "stdf-core"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+thiserror.workspace = true

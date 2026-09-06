@@ -1,0 +1,13 @@
+[package]
+name = "stdf-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "stdf_rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+stdf-core = { path = "../stdf-core" }
+pyo3 = { version = "0.22", features = ["extension-module"] }

@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  rust:
+    name: Rust workspace
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Check
+        run: cargo check --workspace
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Fuzz smoke
+        run: cargo run -p stdf-core --bin fuzz_decode -- --iterations 1500 --max-len 1024
+
+      - name: Performance smoke
+        run: cargo run -p stdf-core --bin perf_baseline -- --parts 1000 --tests-per-part 5
+
+      - name: Parquet performance smoke
+        run: cargo run -p stdf-parquet --bin parquet_perf -- --parts 1000 --tests-per-part 5 --batch-size 4096

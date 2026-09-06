@@ -1,0 +1,8 @@
+[package]
+name = "stdf-validate"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+stdf-core = { path = "../stdf-core" }
+thiserror.workspace = true
