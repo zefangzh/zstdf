@@ -3,6 +3,12 @@ use thiserror::Error;
 /// All errors produced by stdf-core.
 #[derive(Error, Debug)]
 pub enum StdfError {
+    #[error("resource limit exceeded for {resource}: requested {requested}, limit {limit}")]
+    ResourceLimit {
+        resource: &'static str,
+        requested: usize,
+        limit: usize,
+    },
     #[error("unexpected EOF at byte {position}: needed {expected} more bytes")]
     UnexpectedEof { position: usize, expected: usize },
 

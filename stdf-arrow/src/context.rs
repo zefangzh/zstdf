@@ -33,13 +33,16 @@ pub struct PartResult {
 #[derive(Debug, Clone)]
 struct ActivePart {
     part_seq: u64,
+    lot_id: String,
+    wafer_id: Option<String>,
     tests: Vec<TestResult>,
 }
 
 #[derive(Debug, Clone)]
 pub struct StdfContext {
     lot_id: String,
-    wafer_id: Option<String>,
+    wafer_ids: HashMap<(u8, u8), Option<String>>,
+    site_groups: HashMap<(u8, u8), u8>,
     active_parts: HashMap<(u8, u8), ActivePart>,
     part_seq: u64,
 }
@@ -48,7 +51,8 @@ impl Default for StdfContext {
     fn default() -> Self {
         Self {
             lot_id: String::new(),
-            wafer_id: None,
+            wafer_ids: HashMap::new(),
+            site_groups: HashMap::new(),
             active_parts: HashMap::new(),
             part_seq: 0,
         }
@@ -60,6 +64,27 @@ impl StdfContext {
         Self::default()
     }
 
+    fn wafer_for(&self, head: u8, site: u8) -> Option<String> {
+        if let Some(group) = self.site_groups.get(&(head, site)) {
+            return self
+                .wafer_ids
+                .get(&(head, *group))
+                .or_else(|| self.wafer_ids.get(&(head, 255)))
+                .cloned()
+                .flatten();
+        }
+        if let Some(wafer) = self.wafer_ids.get(&(head, 255)) {
+            return wafer.clone();
+        }
+        let mut matches = self.wafer_ids.iter().filter(|((h, _), _)| *h == head);
+        let first = matches.next()?;
+        if matches.next().is_some() {
+            None
+        } else {
+            first.1.clone()
+        }
+    }
+
     pub fn push_record(&mut self, record: &StdfRecord) -> Option<PartResult> {
         match record {
             StdfRecord::Mir(mir) => {
@@ -67,7 +92,20 @@ impl StdfContext {
                 None
             }
             StdfRecord::Wir(wir) => {
-                self.wafer_id = wir.wafer_id.clone();
+                self.wafer_ids.insert(
+                    (wir.head_num, wir.site_grp.unwrap_or(255)),
+                    wir.wafer_id.clone(),
+                );
+                None
+            }
+            StdfRecord::Sdr(sdr) => {
+                for site in &sdr.site_num {
+                    self.site_groups.insert((sdr.head_num, *site), sdr.site_grp);
+                }
+                None
+            }
+            StdfRecord::Wrr(wrr) => {
+                self.wafer_ids.remove(&(wrr.head_num, wrr.site_grp));
                 None
             }
             StdfRecord::Pir(pir) => {
@@ -76,6 +114,8 @@ impl StdfContext {
                     (pir.head_num, pir.site_num),
                     ActivePart {
                         part_seq: self.part_seq,
+                        lot_id: self.lot_id.clone(),
+                        wafer_id: self.wafer_for(pir.head_num, pir.site_num),
                         tests: Vec::new(),
                     },
                 );
@@ -84,10 +124,13 @@ impl StdfContext {
             StdfRecord::Ptr(ptr) => {
                 let key = (ptr.head_num, ptr.site_num);
                 let next_seq = self.part_seq + 1;
+                let wafer_id = self.wafer_for(ptr.head_num, ptr.site_num);
                 let active = self.active_parts.entry(key).or_insert_with(|| {
                     self.part_seq = next_seq;
                     ActivePart {
                         part_seq: next_seq,
+                        lot_id: self.lot_id.clone(),
+                        wafer_id,
                         tests: Vec::new(),
                     }
                 });
@@ -115,6 +158,8 @@ impl StdfContext {
             self.part_seq += 1;
             ActivePart {
                 part_seq: self.part_seq,
+                lot_id: self.lot_id.clone(),
+                wafer_id: self.wafer_for(prr.head_num, prr.site_num),
                 tests: Vec::new(),
             }
         });
@@ -124,8 +169,8 @@ impl StdfContext {
             .unwrap_or_else(|| format!("H{}_S{}_P{}", prr.head_num, prr.site_num, active.part_seq));
 
         PartResult {
-            lot_id: self.lot_id.clone(),
-            wafer_id: self.wafer_id.clone(),
+            lot_id: active.lot_id,
+            wafer_id: active.wafer_id,
             part_id,
             head_num: prr.head_num,
             site_num: prr.site_num,

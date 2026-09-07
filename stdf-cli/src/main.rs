@@ -9,6 +9,10 @@ use stdf_io::StdfReader;
 use stdf_validate::{Severity, ValidationReport};
 
 mod dashboard;
+mod partitioned;
+
+#[cfg(test)]
+mod dataset_tests;
 
 type CliResult<T> = Result<T, Box<dyn Error>>;
 
@@ -22,6 +26,26 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Verify hashes, paths, schemas, and row counts of the current dataset snapshot.
+    VerifyDataset { input: PathBuf },
+    /// Remove abandoned staging files after checking that no writer is active.
+    RecoverDataset { input: PathBuf },
+    /// Generate a lot-selectable dashboard from current catalog versions only.
+    DashboardDir {
+        input: PathBuf,
+        output: PathBuf,
+        #[arg(long, default_value = "zstdf Dataset DataView")]
+        title: String,
+        /// Accounted analysis memory, not a hard process RSS limit.
+        #[arg(long, default_value_t = 256)]
+        memory_limit_mib: usize,
+        #[arg(long, default_value_t = 32)]
+        max_lots: usize,
+        #[arg(long, default_value_t = 100_000)]
+        max_parts: usize,
+    },
+    /// Convert PTR results to bounded, row-partitioned Parquet fragments.
+    ConvertPartitioned(partitioned::Arguments),
     /// Print file-level decode summary.
     Info {
         /// Input STDF path. Gzip is auto-detected by extension or magic bytes.
@@ -73,6 +97,21 @@ enum Command {
         #[arg(long)]
         no_overwrite: bool,
     },
+    /// Convert files or directories to a partitioned Parquet dataset.
+    ConvertMany {
+        /// STDF files or directories to scan recursively (including .stdf.gz/.std.gz).
+        #[arg(required = true)]
+        inputs: Vec<PathBuf>,
+        #[arg(long)]
+        output_dir: PathBuf,
+        /// Comma-separated input-file, lot-id, wafer-id keys.
+        #[arg(long, value_delimiter = ',', default_value = "input-file")]
+        partition_by: Vec<stdf_parquet::PartitionKey>,
+        #[arg(long, default_value_t = 65_536)]
+        batch_size: usize,
+        #[arg(long)]
+        no_overwrite: bool,
+    },
     /// Generate an interactive HTML dashboard from an EAV Parquet file.
     Dashboard {
         /// Input EAV Parquet path produced by `convert`.
@@ -97,6 +136,53 @@ fn main() {
 
 fn execute(cli: Cli, out: &mut impl Write) -> CliResult<()> {
     match cli.command {
+        Command::VerifyDataset { input } => {
+            let catalog = stdf_parquet::catalog::verify_catalog(&input)?;
+            writeln!(
+                out,
+                "sources={} revision={} run_status={}",
+                catalog.sources.len(),
+                catalog.revision,
+                catalog.run.status
+            )?;
+            Ok(())
+        }
+        Command::RecoverDataset { input } => {
+            let removed = stdf_parquet::catalog::recover_dataset(&input)?;
+            writeln!(out, "recovered_items={}", removed.len())?;
+            Ok(())
+        }
+        Command::DashboardDir {
+            input,
+            output,
+            title,
+            memory_limit_mib,
+            max_lots,
+            max_parts,
+        } => {
+            let summary = dashboard::generate_dataset_dashboard(
+                &input,
+                &output,
+                dashboard::DashboardOptions {
+                    title,
+                    ..Default::default()
+                },
+                dashboard::DatasetLimits {
+                    max_memory_bytes: memory_limit_mib
+                        .checked_mul(1024 * 1024)
+                        .ok_or("memory budget overflow")?,
+                    max_lots,
+                    max_parts,
+                },
+            )?;
+            writeln!(
+                out,
+                "rows={}\nparts={}\nyield_percent={:.2}",
+                summary.rows, summary.parts, summary.yield_percent
+            )?;
+            Ok(())
+        }
+        Command::ConvertPartitioned(args) => partitioned::execute(args, out),
         Command::Info { input } => info(input, out),
         Command::Dump { input, limit } => dump(input, limit, out),
         Command::Check { input } => check(input, out),
@@ -116,6 +202,20 @@ fn execute(cli: Cli, out: &mut impl Write) -> CliResult<()> {
             batch_size,
             no_overwrite,
         } => convert(input, output, batch_size, no_overwrite, out),
+        Command::ConvertMany {
+            inputs,
+            output_dir,
+            partition_by,
+            batch_size,
+            no_overwrite,
+        } => convert_many(
+            inputs,
+            output_dir,
+            partition_by,
+            batch_size,
+            no_overwrite,
+            out,
+        ),
         Command::Dashboard {
             input,
             output,
@@ -145,6 +245,48 @@ fn info(input: PathBuf, out: &mut impl Write) -> CliResult<()> {
 
     for error in summary.errors {
         writeln!(out, "error={error}")?;
+    }
+    Ok(())
+}
+
+fn convert_many(
+    inputs: Vec<PathBuf>,
+    output_dir: PathBuf,
+    partition_by: Vec<stdf_parquet::PartitionKey>,
+    batch_size: usize,
+    no_overwrite: bool,
+    out: &mut impl Write,
+) -> CliResult<()> {
+    let mut paths = Vec::new();
+    for input in inputs {
+        if input.is_dir() {
+            paths.extend(find_stdf_files(&input)?);
+        } else {
+            paths.push(input);
+        }
+    }
+    let summary = stdf_parquet::files_to_partitioned_parquet_dir(
+        &paths,
+        &output_dir,
+        batch_size,
+        &stdf_parquet::AtomicWriteOptions {
+            overwrite: !no_overwrite,
+            ..Default::default()
+        },
+        &partition_by,
+    )?;
+    writeln!(out, "files={}", summary.files)?;
+    writeln!(out, "batches={}", summary.batches)?;
+    writeln!(out, "rows={}", summary.rows)?;
+    for file in summary.outputs {
+        writeln!(
+            out,
+            "input={} output={} rows={} batches={}",
+            file.input_path.display(),
+            file.output_path.display(),
+            file.rows,
+            file.batches
+        )?;
     }
     Ok(())
 }
@@ -331,6 +473,9 @@ fn collect_stdf_files(path: &Path, files: &mut Vec<PathBuf>) -> CliResult<()> {
     }
     for entry in fs::read_dir(path)? {
         let entry = entry?;
+        if entry.file_type()?.is_symlink() {
+            continue;
+        }
         let path = entry.path();
         if path.is_dir() {
             collect_stdf_files(&path, files)?;
@@ -342,12 +487,14 @@ fn collect_stdf_files(path: &Path, files: &mut Vec<PathBuf>) -> CliResult<()> {
 }
 
 fn is_stdf_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| {
-            extension.eq_ignore_ascii_case("stdf") || extension.eq_ignore_ascii_case("std")
-        })
-        .unwrap_or(false)
+    let name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_ascii_lowercase();
+    [".stdf", ".std", ".stdf.gz", ".std.gz"]
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
 }
 fn convert(
     input: PathBuf,
@@ -675,7 +822,7 @@ mod tests {
         std::fs::remove_file(report).ok();
         std::fs::remove_dir(dir).ok();
     }
-    fn temp_path(name: &str) -> PathBuf {
+    pub(super) fn temp_path(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -683,7 +830,7 @@ mod tests {
         std::env::temp_dir().join(format!("zstdf_cli_{nanos}_{name}"))
     }
 
-    fn build_test_stdf() -> Vec<u8> {
+    pub(super) fn build_test_stdf() -> Vec<u8> {
         let mut buf = Vec::new();
         push_record(&mut buf, 0, 10, &[2, 4]);
         push_record(&mut buf, 5, 10, &[1, 0]);

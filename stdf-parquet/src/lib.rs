@@ -9,6 +9,14 @@ use parquet::errors::ParquetError;
 use stdf_core::{StdfError, StdfRecord};
 use thiserror::Error;
 
+pub mod catalog;
+mod dataset;
+pub use dataset::fragments::{files_to_partitioned_fragments, FragmentOptions, FragmentSummary};
+pub use dataset::{
+    files_to_partitioned_parquet_dir, FileConversionSummary, MultiFileConversionSummary,
+    PartitionKey,
+};
+
 #[derive(Debug, Error)]
 pub enum StdfParquetError {
     #[error(transparent)]

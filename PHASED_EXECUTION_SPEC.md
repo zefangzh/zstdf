@@ -21,8 +21,11 @@ incrementally.
 - Phase 9A: complete with Parquet-specific performance attribution and profiler workflow.
 - Phase 9B: complete with streaming Parquet conversion, atomic output commits, retry-safe manifests, orphan-temp cleanup, and no-overwrite idempotency.
 - Phase 10A: complete with self-contained interactive HTML dashboard generation from EAV Parquet.
-- Current validation: `cargo check --workspace` and `cargo test --workspace` pass with 158 unit/integration tests; targeted Phase 10A tests pass for `stdf-cli`.
-- Next implementation phase: Phase 10B, partitioned output and multi-file conversion.
+- Phase 10B: implemented with file-granularity partitioned output, multi-file CLI/Python conversion, streaming gzip, and validated retries. See the scope boundary below.
+- Phase 10C.1: implemented for PTR EAV rows with row-level partitioning, bounded state/writers, per-source staged publication, and validated retries.
+- Phase 10C.2: implemented with SHA-256 catalog snapshots, explicit recovery, per-file failure reporting, and lot-selectable dataset dashboards.
+- Current validation: 242 workspace tests, desktop/mobile browser smoke, and Windows RSS stress checks. Phase 10C.2 adds 24 regression tests.
+- Next implementation milestone: Phase 10D, disk-backed dataset analytics under bounded memory (proposed below).
 
 ## Why this spec differs
 
@@ -34,6 +37,8 @@ The active workspace now contains top-level crates:
 - `stdf-parquet`
 - `stdf-py`
 - `stdf-cli`
+- `stdf-validate`
+- `stdf-ascii`
 
 So the practical order is:
 
@@ -334,3 +339,245 @@ Implemented:
   `zstdf-cli dashboard <input.parquet> <output.html> [--title TITLE] [--max-correlation-tests N]`
 - tests for dashboard analytics, correlation detection, safe HTML/JSON
   rendering, and end-to-end CLI generation from a converted Parquet file
+
+## Phase 10B: multi-file conversion and file-granularity partitions
+
+Goal: convert collections of local STDF inputs into predictable Parquet outputs
+without buffering all inputs or opening one Parquet writer per source at once.
+
+Milestone implemented:
+
+- Rust `files_to_partitioned_parquet_dir` with per-file and total summaries.
+- CLI `convert-many --output-dir DIR [--partition-by lot-id,wafer-id] INPUT...`.
+- Python `write_parquet_many(...)` returning `(files, rows)` and releasing the GIL.
+- Recursive CLI discovery of `.std`, `.stdf`, `.std.gz`, and `.stdf.gz`; explicit
+  files can have other extensions. Canonical paths are sorted and deduplicated;
+  directory traversal skips symbolic links to avoid cycles.
+- Sequential streaming of both plain and gzip inputs, including gzip magic detection.
+- Preflight reads every input before output creation and checks partition values
+  against emitted EAV rows. Missing or truncated input prevents the run from writing.
+- One output per source. Stable names contain fingerprints of canonical source
+  path and raw file contents; basename collisions and reordered/subset retries
+  do not reassign outputs. Source changes detected before commit abort the write.
+- `input-file`, `lot-id`, and `wafer-id` keys, percent-encoded directory values,
+  null/empty sentinels, and Windows case-collision protection.
+- Atomic per-file writing and manifests from Phase 9B. Multi-file no-overwrite
+  also validates the existing footer, EAV schema, and source/manifest row counts.
+- An exclusive dataset lock prevents cooperating multi-file jobs from sharing
+  writers or cleaning each other's temporary files. Recovery is explicit after
+  a process crash; a lock is never automatically assumed stale.
+
+Scope and tradeoffs:
+
+- This is file-granularity partitioning. A source with more than one selected
+  lot/wafer value is rejected with guidance to use `input-file`. Automatic row
+  splitting is the proposed Phase 10C milestone, not silently approximated here.
+- Conversion reads each source twice (preflight and write). Retry still needs
+  the source for validation. This trades throughput for predictable destinations
+  and validation before writes.
+- Input fingerprints use fixed FNV-1a 128-bit for local identity, not cryptographic
+  integrity. Footer validation does not verify every Parquet data page.
+- Changed source bytes create a new output identity and retain the previous
+  version. Moving a source also changes its identity. There is no automatic
+  version selection when globbing every Parquet file in the output directory.
+- Writes are atomic per file, not a transaction over the whole dataset. If an
+  I/O failure occurs during writing, earlier completed outputs remain reusable.
+- Memory still includes active-part test state, Arrow batches, and Parquet row
+  groups. `batch_size` is a target row count, not a hard process memory limit.
+  Phase 10B does not claim protection from every malformed-file memory exhaustion.
+
+Validation:
+
+- `cargo fmt --all --check`
+- `cargo check --workspace --offline`
+- `cargo test --workspace --offline`
+- 19 dataset tests cover readable totals, partitions, duplicate paths and names,
+  reorder/subset stability, retries, changed sources, source mutation before
+  commit, invalid/missing/truncated inputs, mixed wafers, escaped/reserved/case
+  variants, gzip and damaged trailers, empty data, locks, damaged Parquet, and
+  mismatched manifests.
+- Three CLI tests cover recursive discovery/deduplication, argument validation,
+  and empty directories. Two Python tests cover conversion/retry and invalid
+  requests; the existing module registration test checks the new function.
+- Smoke workflow: convert two fixture files, rerun with `--no-overwrite`, and
+  generate the existing interactive dashboard from an emitted Parquet file.
+
+## Phase 10C: row partitions, memory limits, and dataset versions
+
+Status: 10C.1 and 10C.2 implemented for PTR EAV conversion.
+
+Goal: support multi-wafer/multi-lot sources under a configured resource budget,
+with resumable dataset versions that downstream dashboards can consume safely.
+
+Milestone 10C.1: bounded row-level partition writer (implemented)
+
+- Route EAV rows by their actual lot/wafer context, including interleaved sites.
+- Add configurable memory, pending-test, open-writer, row-group, and output-file
+  limits. Check limits before retaining data; either spill to bounded disk
+  storage or return a specific resource-limit error.
+- Use a bounded writer cache and numbered immutable fragments. Reopened
+  partitions start a new fragment; do not attempt to append to closed Parquet.
+- Preserve every completed part's rows and prevent a missing PRR from retaining
+  unlimited test results. Report incomplete parts explicitly.
+
+Implementation and scope:
+
+- `bounded_record_batches` applies pending-test and conservative byte reservations
+  before retaining tests. It emits one completed part per batch, avoiding an
+  unbounded list of completed zero-row parts. Missing PRR, duplicate PIR, malformed
+  metadata/test records, and exceeded limits return explicit errors.
+- Active parts snapshot lot/wafer metadata at PIR (or their first PTR for an
+  implicit part). SDR mappings select the wafer group for each head/site;
+  interleaved parts are not reassigned when another wafer starts or finishes.
+- The bounded converter currently supports PTR EAV output. MPR and FTR return
+  an unsupported-expansion error instead of silently losing measurements; large
+  MPR result counts are checked against the pending-test limit first.
+- CLI: `convert-partitioned --output-dir DIR [resource limits] INPUT...`.
+  Python: `write_parquet_partitioned(...)` returns `(files, rows, fragments)`.
+  The older `convert`/`convert-many` entry points retain their existing behavior.
+- The writer cache is limited by both open-file count and measured Parquet
+  buffer size. Eviction closes an immutable fragment; a later visit creates a
+  new numbered fragment. Each fragment contains at most one bounded row group.
+- Preflight validates all inputs using bounded conversion. Each source is then
+  written under a fresh staging directory, synced, and published by directory
+  rename after all fragments and `_SUCCESS.json` close. Handled failures remove
+  only the staging directory owned by that invocation.
+- Source generation IDs include path, source fingerprint, partition keys, and
+  resource options. Repeated invocations validate receipts, safe relative paths,
+  fragment schemas, and row counts before reusing a generation. These local
+  fingerprints and footer checks are not cryptographic data-page verification.
+- Metadata, pending parts, Arrow copies, writer buffers, and encoding reservations
+  have budget allocations. Limits govern accounted state, not an OS-enforced RSS
+  ceiling. Decoder scratch space and allocator/runtime overhead still exist.
+  Oversized parts fail; disk spilling is not implemented. Input/root paths are
+  capped at 1024 encoded bytes to bound retained path metadata.
+- Interrupted processes may leave a root lock and unpublished `.staging-*`
+  directories. Do not glob those fragments into a dataset; explicit recovery
+  and a catalog selecting current generations belong to 10C.2.
+
+Validation for 10C.1:
+
+- Mixed lots/wafers, interleaved sites, and repeated partition visits must have
+  exact row/value parity with the unpartitioned EAV output.
+- Generate many more partitions than the writer limit; verify open handles and
+  buffered bytes stay within configured limits and all fragments remain readable.
+- Stress a single oversized part, missing PRR, huge MPR arrays, tiny budgets,
+  and highly compressed gzip. Measure peak RSS against a documented allowance
+  for runtime/allocator overhead; require bounded failure or spill, never OOM.
+
+Validation executed:
+
+- `cargo test --workspace --offline` (218 tests, including 18 added in 10C.1).
+- New cases cover pending tests across sites, tiny budgets, duplicate PIR,
+  incomplete parts, lot/wafer snapshots, same-head concurrent wafer groups,
+  row/value parity, writer eviction/revisits, capped row groups, fragment-limit
+  cleanup, safe retry receipts, gzip missing PRR, malformed PTR, oversized MPR,
+  empty sources, and CLI/Python conversion and retries.
+- `scripts/measure_partition_memory.ps1` generates gzip inputs incrementally and
+  measures the actual CLI process. On the local Windows debug build, a 16 MiB
+  accounted budget used peak RSS of 11.62 MiB for 2,000 completed parts and
+  11.37 MiB for 20,000. A 1,000,000-PTR input without PRR failed at 129 pending
+  tests with a limit of 128, used 7.33 MiB peak RSS, and created no output.
+- The repeatable stress gate allows baseline RSS plus 16 MiB budget and 64 MiB
+  runtime/allocator variation. These synthetic results are a regression baseline,
+  not proof of a hard RSS ceiling on all vendor inputs.
+
+Milestone 10C.2: versioned catalog and recoverable runs (implemented)
+
+- Atomically publish a dataset catalog with cryptographic source/output hashes,
+  schema/options version, source identity, fragment paths, rows, and run status.
+- Record which output version is current per source. Keep older files available
+  but exclude them from the catalog's current snapshot to prevent double counting.
+- Add explicit resume/retry and stale-lock recovery with owner/process checks.
+  Track per-file errors and define fail-fast versus continue-on-error behavior.
+- Let dashboards consume the catalog snapshot, followed by a `dashboard-dir`
+  workflow that keeps source identity in part keys and supports lot selection.
+
+Validation for 10C.2:
+
+- Inject failures before close, after Parquet commit, during catalog publication,
+  and during retry. Resume must produce one current version without lost rows.
+- Test concurrent jobs, stale versus active locks, changed inputs/options/schema,
+  corrupt output pages, disk-full errors, and missing fragments.
+- Dashboard totals from the catalog must equal the sum of current source versions;
+  identical part IDs across sources and superseded outputs must not merge or
+  double-count parts.
+
+Implementation and scope for 10C.2:
+
+- CLI `convert-partitioned` and Python `write_parquet_partitioned` now write
+  `_catalog.json` above immutable `objects/<generation>/source-...` fragments.
+  Python signatures and tuple results remain unchanged. The lower-level Rust
+  `files_to_partitioned_fragments` API remains available without a catalog.
+- Catalog version 1 records EAV schema version, options hash, canonical source
+  identity, SHA-256 source/output hashes, current fragments, rows, revision, and
+  latest run status. Source updates replace one catalog entry, not old files.
+- Per-source publication is atomic, not a whole-run transaction. Fail-fast is
+  default. `--continue-on-error` records failures, converts remaining inputs,
+  and still exits nonzero. Failed updates retain the last successful version;
+  the dashboard explicitly warns when the latest run is incomplete.
+- Repeating conversion resumes valid immutable generations. Version-2 fragment
+  receipts verify entire output files, not just footers. Older raw generations
+  are not automatically imported: rerun conversion to build a managed catalog.
+- `.catalog.guard` uses a kernel file lock that releases on process exit. Keep
+  the persistent guard file; deleting it can break locking. `recover-dataset`
+  holds this lock, refuses active/unknown legacy owners, removes abandoned
+  staging/catalog temp files, and marks a running catalog as interrupted.
+  Published generations are never removed by recovery.
+- `verify-dataset` validates SHA-256, paths, unique fragments, EAV schemas, and
+  row totals. It reports run status separately from snapshot integrity.
+- `dashboard-dir` verifies the snapshot, scopes part IDs by source, aggregates
+  across fragments, and embeds All-lot and per-lot views. Switching lots refreshes
+  every chart. Memory/lot/part limits fail before replacing existing HTML.
+- Conversion reserves one quarter of its accounted budget for catalog work;
+  catalog JSON is capped at min(memory/64, 16 MiB), with capped serialization.
+  Dashboard analysis uses conservative cumulative row/string reservations.
+  Neither is an OS-enforced RSS ceiling. Parquet reader scratch/allocator
+  overhead requires headroom; dashboards reject oversized workloads rather
+  than spilling. A 256 MiB dashboard budget fits roughly 30,000 short rows.
+- This targets cooperating local writers on ordinary local filesystems. Network
+  filesystem lock/durability guarantees and physical power-loss behavior are
+  not certified. Hashes detect accidental corruption; an attacker able to rewrite
+  both data and catalog is outside this integrity model. Retained generations
+  require disk capacity; automatic garbage collection is not implemented.
+- Existing dashboard analytics still group tests by test number, aggregate XY
+  across the selected lots/wafers, and merge repeated part IDs within one source.
+  They are not yet a retest-aware or test-program-version-aware analysis model.
+- Tested with Rust 1.97.1 on Windows; native file locks require a sufficiently
+  recent Rust toolchain (the workspace does not yet advertise a tested MSRV).
+
+Validation executed for 10C.2:
+
+- 242 workspace tests pass, including publication failure injection, failure
+  before fragment close and after source commit, retry, active/dead/unknown
+  owners, lock exclusion, metadata bounds, source/options changes, corruption,
+  missing files, partial runs, scoped identities, and script-safe lot labels.
+- `scripts/smoke_dataset_dashboard.cjs` passes in headless Edge at 1440x900 and
+  390x844: lot yields, tab switching, search, no horizontal overflow, and no JS
+  runtime errors. Requires Playwright on NODE_PATH and installed Edge.
+- Updated `scripts/measure_partition_memory.ps1` passes with catalog conversion:
+  2,000 parts used 11.41 MiB peak RSS; 20,000 used 11.77 MiB. A million PTRs
+  without PRR failed at the pending-test bound, used 8.02 MiB, and published no
+  source/fragments. Its diagnostic catalog correctly records failure.
+- Fault injection models selected I/O/crash boundaries; it is not a physical
+  disk-full or host-power-loss test.
+
+## Phase 10D: scalable dataset analytics (proposed)
+
+Milestone: replace cumulative in-memory part/result retention with a bounded
+disk-backed aggregation stage, while preserving catalog snapshot semantics and
+the self-contained HTML interface. Add an explicit disk budget and cancellation
+cleanup; do not simply raise the current dashboard memory defaults.
+
+Validation before implementation:
+
+- Golden parity for yield, Pareto, commonality, correlations, and lot selection
+  against the current small-data implementation.
+- Million-row and high-cardinality fixtures must stay within measured memory
+  allowances; disk-full, cancellation, and process-kill tests preserve the prior
+  HTML/catalog and clean only owned temporary state.
+- Define retest/part-instance and test-program identity in a versioned schema
+  before changing counting semantics. Include repeated PART_ID, reused test
+  numbers with different units/limits, and per-wafer XY selection regressions.
+- Retain explicit PTR-only behavior in bounded conversion until a separately
+  validated MPR/FTR expansion milestone is implemented.

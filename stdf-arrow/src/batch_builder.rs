@@ -51,7 +51,7 @@ impl BatchBuilder {
     }
 }
 
-fn build_batch(parts: &[PartResult]) -> RecordBatch {
+pub(crate) fn build_batch(parts: &[PartResult]) -> RecordBatch {
     let rows = parts.iter().map(|part| part.tests.len()).sum();
     let mut lot_id = StringBuilder::with_capacity(rows, rows * 8);
     let mut wafer_id = StringBuilder::with_capacity(rows, rows * 8);

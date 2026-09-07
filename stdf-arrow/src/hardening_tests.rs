@@ -28,6 +28,100 @@ fn interleaved_multisite_parts_keep_tests_with_correct_sites() {
 }
 
 #[test]
+fn open_parts_keep_starting_lot_and_wafer_across_context_changes() {
+    let records = vec![
+        StdfRecord::Mir(mir("L1")),
+        StdfRecord::Wir(wir("W1")),
+        StdfRecord::Pir(pir(1, 0)),
+        StdfRecord::Ptr(ptr(1, 1, 0, 1.0, 0)),
+        StdfRecord::Mir(mir("L2")),
+        StdfRecord::Wir(wir("W2")),
+        StdfRecord::Pir(pir(1, 1)),
+        StdfRecord::Ptr(ptr(2, 1, 1, 2.0, 0)),
+        StdfRecord::Prr(prr(1, 1, Some("B"), 0)),
+        StdfRecord::Prr(prr(1, 0, Some("A"), 0)),
+    ];
+    let batch = records_to_batches(records.into_iter().map(Ok), 100)
+        .unwrap()
+        .remove(0);
+    assert_eq!(as_string(&batch, WAFER_ID).value(0), "W2");
+    assert_eq!(as_string(&batch, WAFER_ID).value(1), "W1");
+    assert_eq!(as_string(&batch, 0).value(1), "L1");
+}
+
+#[test]
+fn bounded_batches_reject_pending_tests_and_incomplete_parts() {
+    let limits = crate::BatchLimits {
+        max_pending_tests: 1,
+        max_memory_bytes: 1024 * 1024,
+    };
+    let records = vec![
+        StdfRecord::Pir(pir(1, 0)),
+        StdfRecord::Ptr(ptr(1, 1, 0, 1.0, 0)),
+        StdfRecord::Ptr(ptr(2, 1, 0, 1.0, 0)),
+    ];
+    let mut batches = crate::bounded_record_batches(records.into_iter().map(Ok), limits).unwrap();
+    assert!(matches!(
+        batches.next().unwrap(),
+        Err(StdfError::ResourceLimit {
+            resource: "pending tests",
+            ..
+        })
+    ));
+    assert!(batches.next().is_none());
+    let mut batches =
+        crate::bounded_record_batches(vec![Ok(StdfRecord::Pir(pir(1, 0)))], limits).unwrap();
+    assert!(batches
+        .next()
+        .unwrap()
+        .unwrap_err()
+        .to_string()
+        .contains("incomplete"));
+}
+
+#[test]
+fn bounded_batches_account_for_tests_across_sites() {
+    let limits = crate::BatchLimits {
+        max_pending_tests: 1,
+        max_memory_bytes: 1024 * 1024,
+    };
+    let records = vec![
+        StdfRecord::Ptr(ptr(1, 1, 0, 1.0, 0)),
+        StdfRecord::Ptr(ptr(2, 1, 1, 1.0, 0)),
+    ];
+    assert!(
+        crate::bounded_record_batches(records.into_iter().map(Ok), limits)
+            .unwrap()
+            .next()
+            .unwrap()
+            .is_err()
+    );
+}
+
+#[test]
+fn bounded_batches_reject_tiny_memory_and_duplicate_pir() {
+    let records = vec![StdfRecord::Pir(pir(1, 0)), StdfRecord::Pir(pir(1, 0))];
+    let limits = crate::BatchLimits {
+        max_pending_tests: 100,
+        max_memory_bytes: 1024 * 1024,
+    };
+    assert!(
+        crate::bounded_record_batches(records.clone().into_iter().map(Ok), limits)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate PIR")
+    );
+    let limits = crate::BatchLimits {
+        max_memory_bytes: 1,
+        ..limits
+    };
+    assert!(crate::bounded_record_batches(records.into_iter().map(Ok), limits).is_err());
+}
+
+#[test]
 fn ptr_without_pir_synthesizes_stable_part_id() {
     let records = vec![
         Ok(StdfRecord::Mir(mir("LOT_SYNTH"))),

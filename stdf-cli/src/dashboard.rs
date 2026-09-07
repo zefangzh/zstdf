@@ -12,6 +12,9 @@ use arrow::array::{
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
+mod dataset;
+pub use dataset::{generate_dataset_dashboard, DatasetLimits};
+
 #[derive(Debug, Clone)]
 pub struct DashboardOptions {
     pub title: String,
@@ -392,13 +395,17 @@ impl Default for AnalysisAccumulator {
 
 impl AnalysisAccumulator {
     fn push(&mut self, row: &TestRow) {
+        self.push_scoped(row, "");
+    }
+
+    fn push_scoped(&mut self, row: &TestRow, source: &str) {
         self.row_count += 1;
         self.lots.insert(row.lot_id.clone());
         if let Some(wafer) = &row.wafer_id {
             self.wafers.insert(wafer.clone());
         }
 
-        let part_key = part_key(row);
+        let part_key = scoped_part_key(row, source);
         let entry = self
             .parts
             .entry(part_key.clone())
@@ -784,15 +791,17 @@ fn unique_site_count(parts: &BTreeMap<String, PartInfo>) -> usize {
         .len()
 }
 
-fn part_key(row: &TestRow) -> String {
-    format!(
-        "{}|{}|{}|{}|{}",
-        row.lot_id,
-        row.wafer_id.as_deref().unwrap_or(""),
-        row.part_id,
+fn scoped_part_key(row: &TestRow, source: &str) -> String {
+    // Tuple encoding distinguishes delimiters, null/empty wafers, and source files.
+    serde_json::to_string(&(
+        source,
+        &row.lot_id,
+        &row.wafer_id,
+        &row.part_id,
         row.head_num,
-        row.site_num
-    )
+        row.site_num,
+    ))
+    .expect("serializing a string tuple cannot fail")
 }
 
 fn test_label(row: &TestRow) -> String {
@@ -1332,10 +1341,12 @@ tr:hover td { background: rgba(87, 242, 209, .05); }
     </div>
     <div class="controls">
       <input id="search" type="search" placeholder="Filter tests or groups">
+      <select id="lot-select" aria-label="Lot selection" hidden></select>
       <select id="commonality-dimension" aria-label="Commonality dimension"></select>
       <input id="min-fails" type="number" min="0" value="0" aria-label="Minimum failures">
     </div>
   </header>
+  <p id="dataset-status" role="status" hidden></p>
 
   <nav class="tabs" aria-label="Dashboard sections">
     <button class="tab active" data-tab="overview">Overview</button>
@@ -1391,7 +1402,8 @@ tr:hover td { background: rgba(87, 242, 209, .05); }
   </section>
 </main>
 <script>
-const data = JSON.parse(document.getElementById('dashboard-data').textContent);
+const snapshot = JSON.parse(document.getElementById('dashboard-data').textContent);
+let data = snapshot.all || snapshot;
 const state = { tab: 'overview', query: '', minFails: 0 };
 document.getElementById('title').textContent = data.title;
 
@@ -1416,6 +1428,27 @@ const dimensionSelect = document.getElementById('commonality-dimension');
 const dimensions = [...new Set(data.commonality.map(item => item.dimension))];
 dimensionSelect.innerHTML = '<option value="">all dimensions</option>' + dimensions.map(value => `<option value="${esc(value)}">${esc(value)}</option>`).join('');
 dimensionSelect.addEventListener('change', render);
+
+const lotSelect = document.getElementById('lot-select');
+if (snapshot.lots) {
+  lotSelect.hidden = false;
+  [{label: 'All lots'}, ...snapshot.lots].forEach((lot, index) => {
+    const option = document.createElement('option');
+    option.value = String(index); option.textContent = lot.label || '(empty lot)';
+    lotSelect.appendChild(option);
+  });
+  const status = document.getElementById('dataset-status');
+  status.hidden = false;
+  status.textContent = `Catalog revision ${snapshot.revision}; latest run: ${snapshot.run_status}. ` +
+    (snapshot.run_status === 'complete' ? 'Showing current successful source versions.' : 'Warning: incomplete run. Showing last successfully published versions; failed updates may retain older data.');
+  lotSelect.addEventListener('change', () => {
+    data = Number(lotSelect.value) === 0 ? snapshot.all : snapshot.lots[Number(lotSelect.value) - 1].data;
+    dimensionSelect.innerHTML = '<option value="">all dimensions</option>' +
+      [...new Set(data.commonality.map(item => item.dimension))].map(value => `<option value="${esc(value)}">${esc(value)}</option>`).join('');
+    document.getElementById('test-detail').innerHTML = '';
+    render();
+  });
+}
 
 function render() {
   renderKpis();
@@ -1706,6 +1739,27 @@ mod tests {
             row("P3", 1, true, 100, 3.0, true),
             row("P3", 1, true, 200, 6.0, true),
         ]
+    }
+
+    #[test]
+    fn part_identity_is_source_scoped_and_delimiter_safe() {
+        let mut a = row("C", 0, true, 1, 1.0, true);
+        a.lot_id = "A|B".into();
+        a.wafer_id = Some("D".into());
+        let mut b = a.clone();
+        b.lot_id = "A".into();
+        b.wafer_id = Some("B|D".into());
+        assert_ne!(scoped_part_key(&a, "one"), scoped_part_key(&b, "one"));
+        assert_ne!(scoped_part_key(&a, "one"), scoped_part_key(&a, "two"));
+        let mut all = AnalysisAccumulator::default();
+        all.push_scoped(&a, "one");
+        all.push_scoped(&a, "one");
+        all.push_scoped(&a, "two");
+        assert_eq!(all.parts.len(), 2);
+        a.wafer_id = None;
+        b = a.clone();
+        b.wafer_id = Some(String::new());
+        assert_ne!(scoped_part_key(&a, "one"), scoped_part_key(&b, "one"));
     }
 
     fn row(

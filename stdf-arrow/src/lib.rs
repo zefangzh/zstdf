@@ -1,6 +1,8 @@
 pub mod batch_builder;
+mod bounded;
 pub mod context;
 pub mod schema;
+pub use bounded::{bounded_record_batches, BatchLimits, BoundedRecordBatchIter};
 
 use arrow::record_batch::RecordBatch;
 use stdf_core::{StdfError, StdfRecord};
