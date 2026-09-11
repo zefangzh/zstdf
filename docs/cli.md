@@ -5,6 +5,16 @@ and converting STDF files.
 
 ## Commands
 
+Trace device test flows and retest differences directly from STDF:
+
+```powershell
+.\target\release\zstdf-cli.exe traceability path\to\inputs --flow-config flow.json --output trace.html
+```
+
+Optional `--flow-closures closures.json` and `--identity-map identities.json`
+provide explicit flow closure and cross-namespace identity links. See the
+[configuration, limits, evidence schema and runnable demo](traceability.md).
+
 Print decode summary:
 
 ```powershell
@@ -181,16 +191,22 @@ staging/catalog temporary files, and preserves published generations. Do not del
 local-filesystem workflow, not a distributed transaction or automatic disk cleanup.
 
 The HTML lot selector switches all charts between All lots and individual lots.
-Part IDs are scoped by source so separate files do not merge matching IDs. A run
+Parts merge by valid wafer + positive PRR X/Y, falling back as a complete tuple
+to lot + positive integer PTR X/Y. Resolved identities merge across source files,
+head/site and PART_ID; unresolved attempts remain source/sequence scoped. A run
 status banner warns when a failed update leaves older successful data selected.
+See [coordinate identity](coordinate_identity.md) for validation, name matching,
+ambiguous candidates, and the required eav-v1 to eav-v2 reconversion.
 
 `dashboard-dir` accepts `--memory-limit-mib` (256), `--max-lots` (32), and
 `--max-parts` (100000). Its conservative budget includes both all-lot and per-lot
 state; roughly 30,000 short rows fit the default budget. Exceeding a limit or
 detecting corruption leaves existing HTML unchanged. These are accounted limits,
 not hard RSS guarantees; disk-backed large-data analytics is the next milestone.
-Repeated part IDs within one source and reused test numbers across test programs
-are not yet modeled as separate retest/program identities.
+Repeated PART_IDs have independent source-local attempt sequences. Resolved
+coordinate identities still use all-pass merging and the first finite result
+per test number; first/final-retest policies and program identities are not
+implemented. Test-row statistics are not deduplicated by the part merge key.
 
 Repeat the Windows memory smoke test after building the CLI:
 

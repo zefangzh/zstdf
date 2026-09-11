@@ -10,6 +10,7 @@ use stdf_validate::{Severity, ValidationReport};
 
 mod dashboard;
 mod partitioned;
+mod traceability;
 
 #[cfg(test)]
 mod dataset_tests;
@@ -26,6 +27,8 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Trace device test steps and retest differences directly from STDF.
+    Traceability(traceability::Arguments),
     /// Verify hashes, paths, schemas, and row counts of the current dataset snapshot.
     VerifyDataset { input: PathBuf },
     /// Remove abandoned staging files after checking that no writer is active.
@@ -136,6 +139,7 @@ fn main() {
 
 fn execute(cli: Cli, out: &mut impl Write) -> CliResult<()> {
     match cli.command {
+        Command::Traceability(args) => traceability::execute(args, out),
         Command::VerifyDataset { input } => {
             let catalog = stdf_parquet::catalog::verify_catalog(&input)?;
             writeln!(

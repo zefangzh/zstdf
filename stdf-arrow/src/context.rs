@@ -16,6 +16,8 @@ pub struct TestResult {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PartResult {
+    /// Source-local test attempt sequence; independent of a reused PART_ID.
+    pub part_sequence: u64,
     pub lot_id: String,
     pub wafer_id: Option<String>,
     pub part_id: String,
@@ -169,6 +171,7 @@ impl StdfContext {
             .unwrap_or_else(|| format!("H{}_S{}_P{}", prr.head_num, prr.site_num, active.part_seq));
 
         PartResult {
+            part_sequence: active.part_seq,
             lot_id: active.lot_id,
             wafer_id: active.wafer_id,
             part_id,

@@ -177,7 +177,7 @@ where
                     rows: summary.rows,
                     batches: summary.batches,
                     batch_size: batch_size.max(1),
-                    schema_version: "eav-v1".to_string(),
+                    schema_version: stdf_arrow::schema::SCHEMA_VERSION.to_string(),
                 };
                 write_manifest_atomic(&manifest_path, &manifest)?;
             }
@@ -226,6 +226,12 @@ fn read_manifest_summary(path: &Path) -> Result<Option<WriteSummary>> {
         return Ok(None);
     }
     let text = fs::read_to_string(path)?;
+    let manifest: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    if manifest["schema_version"].as_str() != Some(stdf_arrow::schema::SCHEMA_VERSION) {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData,
+            "existing output uses an incompatible schema; reconvert without --no-overwrite or use a new output path").into());
+    }
     let rows = find_json_usize(&text, "rows");
     let batches = find_json_usize(&text, "batches");
     Ok(rows
@@ -453,7 +459,7 @@ mod tests {
 
         let builder = ParquetRecordBatchReaderBuilder::try_new(File::open(&path).unwrap()).unwrap();
 
-        assert_eq!(builder.schema().fields().len(), 19);
+        assert_eq!(builder.schema().fields().len(), 21);
         assert_eq!(builder.schema().field(0).name(), "lot_id");
         std::fs::remove_file(path).ok();
     }
@@ -488,7 +494,7 @@ mod tests {
         assert!(path.exists());
         assert!(manifest.contains("\"rows\": 2"));
         assert!(manifest.contains("\"batches\": 1"));
-        assert!(manifest.contains("\"schema_version\": \"eav-v1\""));
+        assert!(manifest.contains("\"schema_version\": \"eav-v2\""));
 
         std::fs::remove_file(manifest_path(&path)).ok();
         std::fs::remove_file(path).ok();
@@ -525,6 +531,40 @@ mod tests {
         );
         std::fs::remove_file(manifest_path(&path)).ok();
         std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn no_overwrite_rejects_legacy_manifest_without_modifying_existing_files() {
+        let path = temp_path("legacy_manifest.parquet");
+        records_to_parquet_path_atomic(
+            test_records().into_iter().map(Ok),
+            &path,
+            10,
+            &AtomicWriteOptions::default(),
+        )
+        .unwrap();
+        let original = std::fs::read(&path).unwrap();
+        let manifest = manifest_path(&path);
+        let legacy = std::fs::read_to_string(&manifest)
+            .unwrap()
+            .replace("eav-v2", "eav-v1");
+        std::fs::write(&manifest, &legacy).unwrap();
+        let error = records_to_parquet_path_atomic(
+            std::iter::empty::<std::result::Result<StdfRecord, StdfError>>(),
+            &path,
+            10,
+            &AtomicWriteOptions {
+                overwrite: false,
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("reconvert"));
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(std::fs::read_to_string(&manifest).unwrap(), legacy);
+        assert_eq!(matching_temp_files(&path), 0);
+        std::fs::remove_file(manifest).unwrap();
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

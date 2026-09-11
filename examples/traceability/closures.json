@@ -1,0 +1,4 @@
+[
+  {"flow_id": "synthetic-example", "version": "1", "lot": "DEMO_CLOSED"},
+  {"flow_id": "synthetic-example", "version": "1", "device": ["wafer-prr", "W1", 2, 1]}
+]

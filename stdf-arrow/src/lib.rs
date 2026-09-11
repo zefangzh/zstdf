@@ -1,6 +1,7 @@
 pub mod batch_builder;
 mod bounded;
 pub mod context;
+pub mod identity;
 pub mod schema;
 pub use bounded::{bounded_record_batches, BatchLimits, BoundedRecordBatchIter};
 
@@ -128,7 +129,7 @@ mod tests {
             .expect("completed part should emit a batch");
 
         assert_eq!(batch.num_rows(), 2);
-        assert_eq!(batch.schema().fields().len(), 19);
+        assert_eq!(batch.schema().fields().len(), 21);
 
         let lot_id = as_string(&batch, LOT_ID);
         let part_id = as_string(&batch, PART_ID);

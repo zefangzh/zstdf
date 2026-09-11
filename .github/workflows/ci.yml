@@ -36,3 +36,6 @@ jobs:
 
       - name: Parquet performance smoke
         run: cargo run -p stdf-parquet --bin parquet_perf -- --parts 1000 --tests-per-part 5 --batch-size 4096
+
+      - name: Analytics spill smoke
+        run: cargo run -p stdf-analytics --bin spill_stress -- 10000

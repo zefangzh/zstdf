@@ -4,9 +4,22 @@ Rust tools for reading semiconductor Standard Test Data Format (STDF) files,
 exporting Parquet data, validating records, and generating interactive HTML
 dashboards. An optional Python extension exposes the conversion APIs as `_zstdf`.
 
+The independent `traceability` command reads STDF files/directories/gzip directly
+and reports device test histories, retest verdict/bin differences, missing steps,
+and source evidence in an offline HTML report. See [traceability usage and demo](docs/traceability.md).
+
+Dashboard part identity now uses **wafer + positive PRR X/Y**, with an all-or-nothing
+fallback to **lot + positive integer PTR X/Y**. New conversions produce `eav-v2`;
+reconvert older Parquet/catalog datasets from their source STDF before using the
+updated dashboard. See [coordinate identity and migration](docs/coordinate_identity.md).
+
 Build instructions: [Windows](#build-on-windows), [RHEL 9](#build-on-red-hat-enterprise-linux-9),
 and [macOS](#build-on-macos). The Linux/macOS commands below are setup guidance;
 they have not been build-tested on this Windows development machine.
+
+For device histories and retests, follow [安装与运行测试流程追溯报告](#安装与运行测试流程追溯报告)
+after building the CLI. This includes a ready-to-run synthetic example and
+configuration for your own CP/FT data.
 
 ## Build on Windows
 
@@ -69,6 +82,18 @@ cargo build --release -p stdf-cli --locked
 ```
 
 The executable is `target\release\zstdf-cli.exe`.
+
+Check that the new command is available:
+
+```powershell
+.\target\release\zstdf-cli.exe traceability --help
+```
+
+To optionally install the executable into Cargo's bin directory, run
+`cargo install --path .\stdf-cli --locked` from the repository root. With
+`$HOME\.cargo\bin` on PATH, you can then use `zstdf-cli` from other folders.
+Installing this way is optional; the examples below use the release executable
+inside the repository.
 
 ## Build on Red Hat Enterprise Linux 9
 
@@ -190,8 +215,8 @@ For bounded, mixed-lot/wafer PTR conversion from a directory:
 This workflow writes multiple Parquet fragments and supports resource limits.
 It currently supports PTR results; MPR/FTR expansion returns an explicit error.
 Its memory budget applies to accounted conversion state, not an OS-enforced
-resident-memory ceiling. The dashboard currently accepts one Parquet file at a
-time. See [CLI documentation](docs/cli.md) for resource options, retries, and
+resident-memory ceiling. Use `dashboard` for one Parquet file or `dashboard-dir`
+for a catalog-backed dataset. See [CLI documentation](docs/cli.md) for resource options, retries, and
 dataset-generation handling.
 
 Quote paths containing spaces, for example `"C:\test data\input.stdf"`.
@@ -223,6 +248,389 @@ xdg-open dashboard.html
 On a headless RHEL server, transfer `dashboard.html` to your desktop computer
 and open it in a browser. The generated HTML is self-contained; no web server
 is required. The same PTR-only and memory-accounting limits described above apply.
+
+## 安装与运行测试流程追溯报告
+
+`traceability` 直接读取多份 STDF，按 wafer/坐标关联芯片的各步骤与重测，生成可离线
+打开的交互式 HTML。支持文件、目录和 gzip；不需要先转换 Parquet，也不需要 Python
+或启动 Web 服务。每次 PRR 都作为独立测试保留，内容相同的文件副本自动去重。
+
+### 1. 安装和构建（Windows）
+
+先按上面的 [Windows 安装说明](#build-on-windows) 安装 Git、Rust、MSVC C++
+Build Tools 和 Windows SDK，然后在 Developer PowerShell 中运行：
+
+```powershell
+git clone https://github.com/zefangzh/zstdf.git
+cd zstdf
+cargo test --workspace --exclude stdf-py --locked
+cargo build --release -p stdf-cli --locked
+.\target\release\zstdf-cli.exe traceability --help
+```
+
+如果已经克隆过仓库，在现有仓库根目录执行构建命令即可，不必再次克隆。
+首次构建需要联网下载依赖；依赖已经缓存后，可以为 Cargo 命令添加 `--offline`。
+CLI 源码构建不需要安装 Python binding。
+
+### 2. 运行仓库自带示例
+
+在仓库根目录运行以下 PowerShell 命令。示例 STDF 已随仓库提供，无需安装 Python：
+
+```powershell
+.\target\release\zstdf-cli.exe traceability `
+  .\examples\traceability\generated\inputs `
+  --flow-config .\examples\traceability\flow.json `
+  --flow-closures .\examples\traceability\closures.json `
+  --identity-map .\examples\traceability\identities.json `
+  --output .\trace.html
+
+Invoke-Item .\trace.html
+```
+
+PowerShell 的反引号必须是每行最后一个字符，后面不要加空格。也可以把命令合并成
+一行。成功时输出 **10 个器件、9 份独立 STDF**；其中一个 gzip 副本不会增加重测次数。
+示例步骤 `stage-a`、`stage-b`、`stage-c` 是演示配置，不代表实际产品流程。
+
+浏览器中可按 wafer/lot、X/Y 坐标、步骤和异常类型筛选；点击矩阵单元格下钻，查看
+各步骤全部测试记录、程序/设备、源文件、SHA-256 和记录位置。重测判定/bin 变化与
+缺失步骤会用文字、图标和颜色高亮。“导出全部 JSON 证据”导出完整数据，不受当前筛选影响。
+
+### 3. 为实际 CP/FT 数据配置流程
+
+先复制示例配置并编辑，目标文件名可自行调整：
+
+```powershell
+Copy-Item .\examples\traceability\flow.json .\flow.json
+notepad .\flow.json
+```
+
+修改流程 `flow_id`、`version`、有序 `steps`，以及各步骤的 `required`、`stop_on_fail`
+和 `matches`。匹配字段取自 STDF 的 MIR：`job_nam`、`job_rev`、`test_cod`、`flow_id`、
+`tst_temp`。字段采用**区分大小写的精确匹配**；同一条件内各字段为 AND，多组条件为 OR。
+不同程序版本可以配置为同一步骤，未匹配或匹配多个步骤时会显示“步骤未识别”。
+
+需要核对实际 MIR 字段时，可以先导出记录文本：
+
+```powershell
+.\target\release\zstdf-cli.exe to-ascii "D:\STDF\CP\sample.stdf" .\sample-records.txt
+notepad .\sample-records.txt
+```
+
+将以下路径换成真实存在的数据目录或文件，再生成报告：
+
+```powershell
+.\target\release\zstdf-cli.exe traceability `
+  "D:\STDF\CP" "D:\STDF\FT" `
+  --flow-config .\flow.json `
+  --output .\trace.html
+
+Invoke-Item .\trace.html
+```
+
+输入可以混合多个文件与目录，含空格的路径必须加引号。输出目录需要提前存在。
+再次成功运行会原子替换同名报告；输入错误、超限或协作取消会保留已有报告。
+
+### 4. 可选：显式关闭流程与映射器件身份
+
+- `--flow-closures closures.json`：指定流程 ID/版本以及 lot 或完整器件身份，明确流程
+  已关闭。未关闭时，尚未进入的末尾必测步骤显示“待测”；已有后续步骤的前置必测缺口
+  可以判为“缺失”。单个 STDF 的 MRR 不等于制造流程关闭。
+- `--identity-map identities.json`：显式将完整的 lot/PTR 键映射到 wafer/PRR 键。
+  不会只因坐标相同就自动跨 wafer/lot 关联。无映射的回退身份显示关联限制。
+
+编辑好这两个可选配置文件后运行：
+
+```powershell
+.\target\release\zstdf-cli.exe traceability `
+  "D:\STDF\CP" "D:\STDF\FT" `
+  --flow-config .\flow.json `
+  --flow-closures .\closures.json `
+  --identity-map .\identities.json `
+  --output .\trace.html
+```
+
+配置格式参见 [流程](examples/traceability/flow.json)、
+[关闭清单](examples/traceability/closures.json)、[身份映射](examples/traceability/identities.json)。
+请按实际产品填写，不要将演示关闭清单或映射直接用于真实数据。
+
+### 5. Linux/macOS 与重新生成合成数据
+
+完成上面的对应平台构建后，可在仓库根目录运行示例：
+
+```bash
+./target/release/zstdf-cli traceability examples/traceability/generated/inputs \
+  --flow-config examples/traceability/flow.json \
+  --flow-closures examples/traceability/closures.json \
+  --identity-map examples/traceability/identities.json \
+  --output trace.html
+```
+
+macOS 用 `open trace.html` 打开；Linux 图形桌面可用 `xdg-open trace.html`。
+无桌面的服务器可以将 HTML 复制到本机浏览器打开。这些原生命令示例尚未在 Linux/macOS
+验证；本次实际构建与浏览器验证在 Windows 完成。
+
+如果需要重新生成合成 STDF 和演示报告，可使用可选的 Python 3 脚本：
+
+```powershell
+python .\examples\traceability\generate_demo.py --cli .\target\release\zstdf-cli.exe
+Invoke-Item .\examples\traceability\generated\demo.html
+```
+
+完整判定规则、资源预算和证据字段见 [追溯报告说明](docs/traceability.md)。本地验证包括
+291 项 Rust 测试、Release 构建、Python binding 编译，以及桌面/手机尺寸的浏览器交互验证；
+测试使用合成 STDF，实际产品流程及 tester 数据需单独验证。
+
+## Command and Parameter Reference
+
+Below, `zstdf-cli` means `.\target\release\zstdf-cli.exe` on Windows or
+`./target/release/zstdf-cli` on Linux/macOS. Alternatively, run commands from
+the repository root with `cargo run -p stdf-cli -- <command> <arguments>`.
+Angle brackets mark required values; square brackets mark optional arguments.
+Do not type the brackets. Quote paths and titles containing spaces.
+
+Use `zstdf-cli --help` to list commands, `zstdf-cli --version` for the version,
+and `zstdf-cli <command> --help` for that command's options. Boolean flags are
+off unless supplied; use `--no-overwrite`, not `--no-overwrite true`.
+
+### `traceability`: Trace Steps and Retest Differences
+
+```text
+zstdf-cli traceability <inputs>... --flow-config flow.json --output trace.html [options]
+```
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `inputs` | Required, one or more | STDF files/directories; gzip supported. |
+| `--flow-config FILE` | Required | Flow ID/version, ordered steps and exact MIR selectors. |
+| `--output FILE` | Required | Self-contained HTML report; parent directory must exist. |
+| `--flow-closures FILE` | None | Explicit lot/device closures for the configured flow ID/version. |
+| `--identity-map FILE` | None | Full lot/PTR-to-wafer/PRR identity mappings; conflicts fail. |
+| `--memory-limit-mib N` | `256` | Accounted working-data budget, minimum 16 MiB; not a hard RSS cap. |
+| `--disk-limit-mib N` | `1024` | Live sort scratch plus reserved report staging; must exceed report limit. |
+| `--max-report-mib N` | `32` | Maximum complete HTML size; positive and at most memory limit / 4. |
+| `--max-devices N` | `100000` | Maximum reported devices; no silent truncation. |
+| `--max-sources N` | `10000` | Maximum source paths, including duplicate-content aliases. |
+| `--temp-dir DIR` | OS temporary directory | Existing directory for bounded sort scratch. |
+| `--cancel-file FILE` | None | Creating this file requests cooperative cancellation; checked before commit. |
+
+Unknown ordering does not imply a final result. The report retains every PRR
+attempt and highlights verdict/bin differences across all attempts. See
+[traceability rules and limitations](docs/traceability.md) for missing/pending,
+failure stops, identity fallback and cancellation behavior.
+
+### `info`: Inspect a File
+
+```text
+zstdf-cli info <input>
+```
+
+| Parameter | Meaning |
+| --- | --- |
+| `input` | Required STDF file path; plain or gzip-compressed. |
+
+Prints byte order, record counts, bytes consumed, truncation status, and decode
+errors. This is an inspection command: reported decode errors do not themselves
+make its exit status fail. Use `check` for validation in automation.
+
+### `dump`: Print Decoded Records
+
+```text
+zstdf-cli dump <input> [--limit N]
+zstdf-cli dump input.stdf --limit 20
+zstdf-cli dump input.stdf > records.txt
+```
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `input` | Required | STDF input file. |
+| `--limit N` | No limit | Maximum decoded records to print, not bytes or test results. `0` prints none. |
+
+Writes compact record text to standard output. There is no output-path argument;
+use shell redirection as shown, or `to-ascii` for reference-style formatting.
+
+### `check`: Validate STDF Structure
+
+```text
+zstdf-cli check <input>
+```
+
+| Parameter | Meaning |
+| --- | --- |
+| `input` | Required STDF file to decode and validate. |
+
+Prints a summary and findings, including severity, rule, record, and offset.
+Checks include record pairing, lot metadata, abort detection, PTR limits/results,
+test-name consistency, and hardware-bin counts. Validation errors produce a
+nonzero exit status.
+
+### `to-ascii`: Export Reference-Style Text
+
+```text
+zstdf-cli to-ascii <input> [output] [--debug]
+zstdf-cli to-ascii input.stdf decoded.txt
+```
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `input` | Required | STDF file to export. |
+| `output` | Input path with its last extension replaced by `.txt` | Destination text file. `input.stdf` becomes `input.txt`; `input.stdf.gz` becomes `input.stdf.txt`. |
+| `--debug` | Off | Accepted for legacy compatibility; currently does not change output or enable extra logging. |
+
+Includes reference-style record formatting, header/footer, scales, timestamps,
+and generic data formatting. Existing output is overwritten; its parent directory
+must already exist. The complete text is assembled in memory before writing,
+so this command is not a bounded-memory export.
+
+### `batch-check`: Validate a Directory
+
+```text
+zstdf-cli batch-check <root-dir> [report-path] [--threads N]
+zstdf-cli batch-check inputs reports.txt --threads 2
+```
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `root-dir` | Required | Directory to scan recursively for `.std`, `.stdf`, `.std.gz`, and `.stdf.gz` files, case-insensitively. Symbolic-link entries are skipped. |
+| `report-path` | `<root-dir>/sanity_report.txt` | Consolidated text report; an existing report is overwritten. |
+| `--threads N` | `1` | Parallel validation workers. `0` is treated as `1`, not automatic CPU detection. |
+
+Prints file/failure counts and the report path. Any failed input produces a
+nonzero exit status. More workers can increase memory usage, especially for gzip
+inputs; use one worker when diagnosing failures or working with limited RAM.
+
+### `convert`: Produce One Parquet File
+
+```text
+zstdf-cli convert <input> <output> [--batch-size N] [--no-overwrite]
+zstdf-cli convert input.stdf output.parquet --batch-size 4096 --no-overwrite
+```
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `input` | Required | Source STDF file. |
+| `output` | Required | Destination long-format EAV Parquet file. |
+| `--batch-size N` | `65536` | Target EAV rows per Arrow batch; `0` becomes `1`. Part completion can exceed this target, so it is not a hard memory limit. |
+| `--no-overwrite` | Off | If output exists, return its existing manifest summary instead of replacing it. |
+
+Writes a companion `<output>.json` manifest and prints batch/row counts. By
+default an existing output may be replaced. The no-overwrite fast path requires
+a readable manifest but does not reopen the input or perform full integrity
+verification. It is not proof that an existing output matches a changed source.
+
+### `convert-many`: File-Level Partitioning
+
+```text
+zstdf-cli convert-many <inputs>... --output-dir <dir> [--partition-by KEYS] [--batch-size N] [--no-overwrite]
+zstdf-cli convert-many inputs --output-dir dataset --partition-by lot-id,wafer-id
+```
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `inputs` | Required, one or more | Space-separated files or recursively scanned directories. Directory scanning uses the STDF extensions listed under `batch-check`. |
+| `--output-dir DIR` | Required | Root directory for generated Parquet files and manifests. |
+| `--partition-by KEYS` | `input-file` | Comma-separated `input-file`, `lot-id`, or `wafer-id` keys, in directory nesting order. |
+| `--batch-size N` | `65536` | Target EAV rows per batch, not a RAM cap. |
+| `--no-overwrite` | Off | Reuse matching existing output only after source/manifest and Parquet metadata checks. The source must remain available. |
+
+Canonical input paths are deduplicated. This produces one Parquet file per source;
+selected lot/wafer keys must be consistent within each source. Use
+`convert-partitioned` for a source containing multiple lots or wafers. Output names
+include source identity information; changed source content can create new files.
+
+### `convert-partitioned`: Bounded Dataset Conversion
+
+```text
+zstdf-cli convert-partitioned <inputs>... --output-dir <dir> [options]
+zstdf-cli convert-partitioned inputs --output-dir dataset --memory-limit-mib 256 --row-group-rows 4096
+```
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `inputs` | Required, one or more | STDF files or directories to scan recursively. |
+| `--output-dir DIR` | Required | Catalog-backed dataset root containing Parquet fragments and `_catalog.json`. |
+| `--partition-by KEYS` | `lot-id,wafer-id` | Comma-separated partition keys: `input-file`, `lot-id`, `wafer-id`. Routes rows rather than entire input files. |
+| `--memory-limit-mib N` | `256` | Budget for accounted conversion state, in MiB (1,048,576 bytes). Not a hard process RSS limit. |
+| `--max-pending-tests N` | `100000` | Maximum pending test results across unfinished parts. |
+| `--max-open-writers N` | `4` | Maximum simultaneously open fragment writers. |
+| `--row-group-rows N` | `65536` | Maximum rows per row group and fragment. Smaller values can create more output files. |
+| `--max-output-files N` | `10000` | Maximum generated fragments for an invocation; also affects reserved metadata memory. |
+| `--continue-on-error` | Off | Continue processing other inputs after an input fails, rather than stopping at the first failure. Any failures still result in a nonzero CLI exit status. |
+
+Resource limits must be positive. Currently supports PTR results; unsupported
+MPR/FTR expansion is an explicit error. Prints rows, fragments, writer/memory
+peaks, and failures. Inspect `_catalog.json` for run status and failed inputs.
+This command has no `--no-overwrite` option; dataset identity and current versions
+are managed through its catalog.
+
+### `verify-dataset`: Check Dataset Integrity
+
+```text
+zstdf-cli verify-dataset <input>
+zstdf-cli verify-dataset dataset
+```
+
+| Parameter | Meaning |
+| --- | --- |
+| `input` | Required catalog-backed dataset root, not an individual Parquet file. |
+
+Verifies current snapshot paths, hashes, schemas, and row counts. Prints source
+count, catalog revision, and run status; verification failures return nonzero.
+
+### `recover-dataset`: Clean Interrupted Work
+
+```text
+zstdf-cli recover-dataset <input>
+zstdf-cli recover-dataset dataset
+```
+
+| Parameter | Meaning |
+| --- | --- |
+| `input` | Required dataset root to recover after an interrupted conversion. |
+
+This command **modifies the dataset**: it removes abandoned `.staging-*`
+directories, recoverable stale writer markers, and temporary catalog files under
+the managed paths. It checks writer ownership/locks and refuses active writers.
+A catalog run left as `running` is marked `interrupted`. It does not delete
+completed generations or reconstruct missing/corrupt committed Parquet files.
+Run `verify-dataset` afterward before consuming the data.
+
+### `dashboard`: Visualize One Parquet File
+
+```text
+zstdf-cli dashboard <input> <output> [--title TEXT] [--max-correlation-tests N]
+zstdf-cli dashboard output.parquet dashboard.html --title "Lot DataView" --max-correlation-tests 24
+```
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `input` | Required | Existing EAV Parquet file, such as output from `convert`; not an STDF file or dataset directory. |
+| `output` | Required | Destination self-contained interactive HTML file. |
+| `--title TEXT` | `zstdf DataView` | Dashboard title; quote text containing spaces. |
+| `--max-correlation-tests N` | `16` | Maximum numeric tests considered for correlation analysis. Values below `2` become `2`. Does not limit all input rows/tests loaded. |
+
+Prints row/part counts and yield percentage. This single-file command does not
+provide a memory-limit flag. Open the generated HTML in a browser as described
+in the platform examples above.
+
+### `dashboard-dir`: Visualize a Catalog Dataset
+
+```text
+zstdf-cli dashboard-dir <input> <output> [--title TEXT] [--memory-limit-mib N] [--max-lots N] [--max-parts N]
+zstdf-cli dashboard-dir dataset dashboard.html --title "Dataset DataView" --max-lots 64
+```
+
+| Parameter | Default | Meaning |
+| --- | --- | --- |
+| `input` | Required | Catalog-backed dataset root from `convert-partitioned`, not an arbitrary folder of Parquet files. |
+| `output` | Required | Destination self-contained HTML dashboard with lot selection. |
+| `--title TEXT` | `zstdf Dataset DataView` | Dashboard title. |
+| `--memory-limit-mib N` | `256` | Accounted analysis-memory budget in MiB; minimum `1`. Not a hard RSS cap. |
+| `--max-lots N` | `32` | Maximum distinct lots allowed in the analysis; must be positive. |
+| `--max-parts N` | `100000` | Maximum distinct parts across the analysis; must be positive. |
+
+Reads current catalog versions rather than mixing historical generations.
+Resource limits cause errors instead of silently truncating the analysis.
+Unlike `dashboard`, this command has no `--max-correlation-tests` CLI option.
 
 ## Optional Python Binding
 
@@ -313,6 +721,36 @@ Example conversion on either platform:
 .venv/bin/python -c "import _zstdf; print(_zstdf.write_parquet('/path/to/input.stdf', 'output.parquet'))"
 ```
 
+### Python Function Parameters
+
+The Python module uses underscores in parameter names. File paths are strings;
+`input_paths` and `partition_by` are lists of strings, not comma-separated text.
+The multi-file Python functions take explicit file paths, unlike the CLI's
+recursive directory expansion.
+
+| Function | Parameters and defaults | Return value |
+| --- | --- | --- |
+| `read_batches(path, batch_size)` | `path`: STDF source. Pass `None` for the default batch size of `65536`; `0` becomes `1`. | List of PyArrow record batches. All batches are collected in memory; this is not a streaming iterator. |
+| `write_parquet(input_path, output_path, batch_size=None, overwrite=None)` | Required source/destination paths. `batch_size=None` means `65536`. `overwrite=None` means `True`; `False` uses the same existing-manifest fast path as CLI `convert --no-overwrite`. | Number of rows. |
+| `write_parquet_many(input_paths, output_dir, batch_size=None, overwrite=None, partition_by=None)` | Required source list/destination directory. Batch and overwrite defaults as above. `partition_by=None` means `["input-file"]`; `[]` disables partition directories. | `(files, rows)`. |
+| `write_parquet_partitioned(input_paths, output_dir, partition_by=None, memory_limit_mib=256, max_pending_tests=100000, max_open_writers=4, row_group_rows=65536, max_output_files=10000)` | Required source list/dataset root. `partition_by=None` means `["lot-id", "wafer-id"]`; `[]` disables partition directories. Resource parameters have the same meanings as their hyphenated CLI counterparts above. No `overwrite` or `continue_on_error` parameter. | `(files, rows, fragments)`. |
+
+Example with explicit parameters:
+
+```python
+import _zstdf
+
+batches = _zstdf.read_batches("input.stdf", 4096)
+files, rows, fragments = _zstdf.write_parquet_partitioned(
+    ["input.stdf"],
+    "dataset",
+    partition_by=["lot-id", "wafer-id"],
+    memory_limit_mib=256,
+    max_open_writers=2,
+    row_group_rows=4096,
+)
+```
+
 ## Troubleshooting
 
 | Error | What to check |
@@ -323,12 +761,39 @@ Example conversion on either platform:
 | Python/PyO3 build errors | For CLI-only use, exclude `stdf-py` from workspace tests. For Python use, select the 64-bit Python 3.12 environment with `PYO3_PYTHON` as shown above. |
 | File not found when generating a dashboard | Confirm conversion succeeded and supply the actual generated Parquet path. |
 | Unknown `convert-partitioned` command | Ensure your checkout includes Phase 10C.1 and rebuild the release CLI. |
+| Unknown `traceability` command | Update the checkout to a revision containing traceability, then run `cargo build --release -p stdf-cli --locked`. Use the executable from that checkout. |
+| 追溯报告显示“步骤未识别” | 检查实际 MIR 字段与 `matches` 的大小写、程序版本和字段值；避免同一记录匹配多个步骤。 |
+| 末尾步骤显示“待测” | 这是未关闭流程的正常状态；只有确认流程结束后才提供对应关闭清单。 |
+| 回退身份关联受限 / 身份未解析 | 检查 wafer/PRR 坐标与 PTR 坐标候选；需要跨命名空间关联时提供完整身份映射。 |
+| Traceability resource limit exceeded | Adjust the reported limit together with related memory/disk/report constraints, or split inputs by the intended flow population. No partial report is published. |
 | `cargo: command not found` on Linux/macOS | Run `. "$HOME/.cargo/env"` or reopen your terminal after rustup installation. |
 | `cc` or `clang` not found | On RHEL install GCC/build utilities; on macOS install the Command Line Tools and verify `xcode-select -p`. |
 | RHEL cannot find Python 3.12 packages | Check that the enabled repositories provide RHEL 9.4 or later packages. Python is optional for the CLI. |
 | Wrong architecture on macOS | Use matching native architectures for the terminal, Rust, Homebrew, and Python. Recreate the virtual environment if its Python architecture is wrong. |
 
 ## Project Documentation
+
+### Phase 10D Development Tools
+
+The `stdf-analytics` crate currently provides a bounded disk-backed sorting
+foundation, not a replacement dashboard engine. Existing dashboard resource
+limits are unchanged. Run its regression suite and scratch-storage stress tool:
+
+```text
+cargo test -p stdf-analytics --offline
+cargo run -p stdf-analytics --bin spill_stress -- 100000
+```
+
+`spill_stress [rows]` takes an optional nonnegative record count (default
+`100000`). It uses the OS temporary directory, a 1 MiB accounted memory budget,
+a 256 MiB scratch-file budget, and merge fan-in 8. It checks stable ordering,
+row counts, and cleanup, then prints peak scratch bytes and elapsed milliseconds.
+It does not read STDF inputs or modify datasets. Forced termination may leave an
+owned `.zstdf-analytics-*` scratch directory; automated recovery is not yet provided.
+On Windows, run `powershell -File scripts/measure_analytics_memory.ps1` for the
+100,000/1,000,000-record RSS regression check. It builds the runner, preserves logs
+under `target`, and checks a 64 MiB peak/16 MiB growth allowance by default.
+See the phased spec for dashboard integration and operational validation gates.
 
 - [CLI and Python usage](docs/cli.md)
 - [Phased execution spec and implementation status](PHASED_EXECUTION_SPEC.md)

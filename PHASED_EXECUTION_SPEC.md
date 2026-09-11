@@ -9,6 +9,12 @@ incrementally.
 
 ## Current progress
 
+- Coordinate identity update: `eav-v2` adds `part_sequence` and nullable
+  `part_merge_key`. `coordinate-v1` supersedes the legacy identity contract for
+  both dashboard commands. See `docs/coordinate_identity.md`; original wafer,
+  PRR coordinates and PART_ID remain unchanged. Existing eav-v1 data requires
+  reconversion into a new output/dataset.
+
 - Phase 1: complete in the active top-level `stdf-core` crate.
 - Phase 2: complete in the active top-level `stdf-core` crate as of this pass.
 - Phase 3: complete in the active top-level `stdf-core` crate as of this pass.
@@ -24,8 +30,9 @@ incrementally.
 - Phase 10B: implemented with file-granularity partitioned output, multi-file CLI/Python conversion, streaming gzip, and validated retries. See the scope boundary below.
 - Phase 10C.1: implemented for PTR EAV rows with row-level partitioning, bounded state/writers, per-source staged publication, and validated retries.
 - Phase 10C.2: implemented with SHA-256 catalog snapshots, explicit recovery, per-file failure reporting, and lot-selectable dataset dashboards.
-- Current validation: 242 workspace tests, desktop/mobile browser smoke, and Windows RSS stress checks. Phase 10C.2 adds 24 regression tests.
-- Next implementation milestone: Phase 10D, disk-backed dataset analytics under bounded memory (proposed below).
+- Phase 10C.2 validation baseline: 242 workspace tests, desktop/mobile browser smoke, and Windows RSS stress checks. Phase 10C.2 adds 24 regression tests.
+- Phase 10D.1: implemented as the `stdf-analytics` bounded external-sort foundation; not yet connected to dashboard commands.
+- Next implementation milestone: Phase 10D.2, disk-backed dashboard reducers and small-data analytics parity. Full Phase 10D remains incomplete.
 
 ## Why this spec differs
 
@@ -39,6 +46,7 @@ The active workspace now contains top-level crates:
 - `stdf-cli`
 - `stdf-validate`
 - `stdf-ascii`
+- `stdf-analytics` (Phase 10D scratch-storage foundation)
 
 So the practical order is:
 
@@ -491,7 +499,8 @@ Milestone 10C.2: versioned catalog and recoverable runs (implemented)
 - Add explicit resume/retry and stale-lock recovery with owner/process checks.
   Track per-file errors and define fail-fast versus continue-on-error behavior.
 - Let dashboards consume the catalog snapshot, followed by a `dashboard-dir`
-  workflow that keeps source identity in part keys and supports lot selection.
+  workflow with lot selection. Part keys now follow `coordinate-v1`; only
+  unresolved attempts retain source scoping.
 
 Validation for 10C.2:
 
@@ -540,8 +549,8 @@ Implementation and scope for 10C.2:
   not certified. Hashes detect accidental corruption; an attacker able to rewrite
   both data and catalog is outside this integrity model. Retained generations
   require disk capacity; automatic garbage collection is not implemented.
-- Existing dashboard analytics still group tests by test number, aggregate XY
-  across the selected lots/wafers, and merge repeated part IDs within one source.
+- Existing dashboard analytics still group tests by test number and aggregate XY
+  across the selected lots/wafers. Part merging now uses `coordinate-v1`.
   They are not yet a retest-aware or test-program-version-aware analysis model.
 - Tested with Rust 1.97.1 on Windows; native file locks require a sufficiently
   recent Rust toolchain (the workspace does not yet advertise a tested MSRV).
@@ -562,7 +571,7 @@ Validation executed for 10C.2:
 - Fault injection models selected I/O/crash boundaries; it is not a physical
   disk-full or host-power-loss test.
 
-## Phase 10D: scalable dataset analytics (proposed)
+## Phase 10D: scalable dataset analytics (in progress)
 
 Milestone: replace cumulative in-memory part/result retention with a bounded
 disk-backed aggregation stage, while preserving catalog snapshot semantics and
@@ -581,3 +590,70 @@ Validation before implementation:
   numbers with different units/limits, and per-wafer XY selection regressions.
 - Retain explicit PTR-only behavior in bounded conversion until a separately
   validated MPR/FTR expansion milestone is implemented.
+
+### 10D.1: bounded scratch-store foundation (implemented)
+
+The new `stdf-analytics` crate provides stable external sorting of binary
+key/value records without introducing a database runtime. Memory limits bound
+accounted chunk/front state, disk limits include live merge inputs and output,
+and fan-in limits open input files. Run metadata uses numeric ranges rather than
+an unbounded vector of paths. Identical keys retain ingestion order.
+
+Cancellation is cooperative through `Arc<AtomicBool>` during ingestion, merge,
+and replay. Handled failures and normal drop clean only the invocation's owned
+scratch directory. Corrupt lengths are rejected before allocation, truncated
+records fail rather than silently ending replay, and an errored store cannot
+be reused. There is no publication or mutation of dataset/HTML paths.
+
+Scope boundary: this is a storage API, not a dashboard engine. Existing
+`dashboard-dir` memory/part limits and counting behavior are unchanged. Hard
+process termination can leave scratch directories; automatic stale-job recovery,
+OS signal wiring, real disk-full testing, and measured RSS gates remain pending.
+Scratch bytes are not filesystem allocation/quota bytes, and memory accounting
+is not a process RSS ceiling. Callers must stream replay rather than collect it.
+
+Validation:
+
+- `cargo test -p stdf-analytics --offline`: 19 tests, including multi-pass stable
+  sorting, duplicate/binary keys, quotas during merge, cancellation, invalid
+  configuration, corrupt/truncated records, missing runs, and isolated cleanup.
+- `cargo run -p stdf-analytics --bin spill_stress -- 100000`: bounded scratch
+  stress with row/order validation and cleanup verification.
+- `scripts/measure_analytics_memory.ps1`: repeatable Windows stress/RSS sampling
+  at 100,000 and 1,000,000 records, with configurable 64 MiB absolute/16 MiB
+  growth regression allowances. These are runtime headroom gates, not memory
+  guarantees for a future dashboard or arbitrary record distributions.
+- Existing CLI tests remain the compatibility baseline; no analytics result
+  parity claim is made until integration in 10D.2.
+
+### 10D.2: disk-backed dashboard reducers (next)
+
+Milestone: use the scratch store to group complete part identities across
+catalog fragments, reduce part yield and correlation observations incrementally,
+and retain only explicitly bounded aggregate/output state. Add CLI scratch-path
+and disk-budget options only when the dashboard actually consumes them.
+
+Current contract `coordinate-v1` uses eav-v2 `part_merge_key`: a valid uppercase
+alphanumeric wafer and positive PRR X/Y, otherwise lot and unambiguous positive
+integer PTR X/Y. Resolved identities merge across source/lot (for wafer keys),
+PART_ID and head/site. Null merge keys use `(source, part_sequence)` and remain
+separate. The prior `analytics-identity-v1` tuple contract is superseded by this
+explicit schema/identity version; do not reproduce it in the new reducers.
+Part pass remains a conjunction, metadata comes from the first row, correlation
+uses the first finite result per test number, and tests remain grouped by number.
+These policies are not first/final-retest or test-program-aware analytics.
+
+Validation: compare every All-lot/per-lot payload field (excluding timestamps)
+against the existing implementation for yield, Pareto, commonality, correlations,
+quality, bins, process windows, and XY maps. Include fragment splits, repeated
+PART_ID, identical IDs across sources, reused test numbers with different
+units/limits, null/empty wafer IDs, missing/nonfinite results, and changed catalog
+versions. Preserve existing HTML on every handled failure.
+
+### 10D.3: operational qualification (pending)
+
+Milestone: explicit stale scratch recovery with owner/lock checks, CLI cancellation,
+disk exhaustion handling, and process-kill recovery. Validate million-row and
+high-cardinality dashboards with measured RSS and disk peaks. Add per-wafer XY
+selection with separate parity/UI tests. Do not remove the existing safeguards
+or advertise unbounded-size dashboard support until these gates pass.

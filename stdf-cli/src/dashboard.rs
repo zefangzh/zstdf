@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::array::{
     Array, BooleanArray, Float32Array, Int16Array, StringArray, UInt16Array, UInt32Array,
-    UInt8Array,
+    UInt64Array, UInt8Array,
 };
 use arrow::record_batch::RecordBatch;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
@@ -41,6 +41,8 @@ pub struct DashboardSummary {
 
 #[derive(Debug, Clone)]
 struct TestRow {
+    part_sequence: u64,
+    part_merge_key: Option<String>,
     lot_id: String,
     wafer_id: Option<String>,
     part_id: String,
@@ -296,7 +298,9 @@ fn analyze_parquet(
     options: &DashboardOptions,
 ) -> Result<DashboardData, Box<dyn Error>> {
     let file = File::open(path)?;
-    let reader = ParquetRecordBatchReaderBuilder::try_new(file)?.build()?;
+    let reader = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    require_coordinate_schema(reader.schema().as_ref())?;
+    let reader = reader.build()?;
     let mut analyzer = AnalysisAccumulator::default();
     for batch in reader {
         let batch = batch?;
@@ -307,7 +311,21 @@ fn analyze_parquet(
     Ok(analyzer.finish(options))
 }
 
+fn require_coordinate_schema(schema: &arrow::datatypes::Schema) -> Result<(), Box<dyn Error>> {
+    if schema != stdf_arrow::eav_schema().as_ref() {
+        return Err(invalid_data("dashboard requires eav-v2 coordinate identity columns; reconvert the source STDF to a new Parquet file/dataset").into());
+    }
+    Ok(())
+}
+
 fn rows_from_batch(batch: &RecordBatch) -> Result<Vec<TestRow>, Box<dyn Error>> {
+    require_coordinate_schema(batch.schema().as_ref())?;
+    let part_sequence = batch
+        .column(stdf_arrow::schema::PART_SEQUENCE)
+        .as_any()
+        .downcast_ref::<UInt64Array>()
+        .ok_or_else(|| invalid_data("part_sequence column is not UInt64"))?;
+    let part_merge_key = string_col(batch, stdf_arrow::schema::PART_MERGE_KEY, "part_merge_key")?;
     let lot_id = string_col(batch, stdf_arrow::schema::LOT_ID, "lot_id")?;
     let wafer_id = string_col(batch, stdf_arrow::schema::WAFER_ID, "wafer_id")?;
     let part_id = string_col(batch, stdf_arrow::schema::PART_ID, "part_id")?;
@@ -330,7 +348,12 @@ fn rows_from_batch(batch: &RecordBatch) -> Result<Vec<TestRow>, Box<dyn Error>> 
 
     let mut rows = Vec::with_capacity(batch.num_rows());
     for row in 0..batch.num_rows() {
+        if part_sequence.is_null(row) {
+            return Err(invalid_data("part_sequence must not be null").into());
+        }
         rows.push(TestRow {
+            part_sequence: part_sequence.value(row),
+            part_merge_key: optional_string(part_merge_key, row),
             lot_id: required_string(lot_id, row, "lot_id")?,
             wafer_id: optional_string(wafer_id, row),
             part_id: required_string(part_id, row, "part_id")?,
@@ -729,6 +752,7 @@ fn quality_seed() -> BTreeMap<String, (usize, usize)> {
         "missing result",
         "missing limits",
         "missing test_time_ms",
+        "unresolved coordinate identity",
     ]
     .into_iter()
     .map(|label| (label.to_string(), (0, 0)))
@@ -738,6 +762,9 @@ fn quality_seed() -> BTreeMap<String, (usize, usize)> {
 fn push_quality(groups: &mut BTreeMap<String, (usize, usize)>, row: &TestRow) {
     for value in groups.values_mut() {
         value.0 += 1;
+    }
+    if row.part_merge_key.is_none() {
+        groups.get_mut("unresolved coordinate identity").unwrap().1 += 1;
     }
     if row.wafer_id.is_none() {
         groups.get_mut("missing wafer_id").unwrap().1 += 1;
@@ -792,16 +819,12 @@ fn unique_site_count(parts: &BTreeMap<String, PartInfo>) -> usize {
 }
 
 fn scoped_part_key(row: &TestRow, source: &str) -> String {
-    // Tuple encoding distinguishes delimiters, null/empty wafers, and source files.
-    serde_json::to_string(&(
-        source,
-        &row.lot_id,
-        &row.wafer_id,
-        &row.part_id,
-        row.head_num,
-        row.site_num,
-    ))
-    .expect("serializing a string tuple cannot fail")
+    // Resolved wafer/PRR or lot/PTR coordinates merge across files and sites.
+    // An unresolved attempt is isolated by source and its PIR/PRR sequence,
+    // never by a possibly empty/reused PART_ID.
+    row.part_merge_key
+        .clone()
+        .unwrap_or_else(|| serde_json::json!(["unresolved", source, row.part_sequence]).to_string())
 }
 
 fn test_label(row: &TestRow) -> String {
@@ -993,6 +1016,7 @@ fn dashboard_json(data: &DashboardData) -> String {
             "{{",
             "\"title\":{},",
             "\"generated_at_unix\":{},",
+            "\"identity_rule_version\":{},",
             "\"kpis\":{},",
             "\"pareto\":{},",
             "\"wafer_yield\":{},",
@@ -1008,6 +1032,7 @@ fn dashboard_json(data: &DashboardData) -> String {
         ),
         json_string(&data.title),
         data.generated_at_unix,
+        json_string(stdf_arrow::identity::IDENTITY_VERSION),
         kpis_json(&data.kpis),
         test_aggregates_json(&data.pareto),
         group_aggregates_json(&data.wafer_yield),
@@ -1337,7 +1362,7 @@ tr:hover td { background: rgba(87, 242, 209, .05); }
     <div>
       <div class="eyebrow">STDF spectrum dataview</div>
       <h1 id="title"></h1>
-      <p class="subtitle">Interactive yield, Pareto, failure commonality, correlation, process window, spatial and data-quality analysis generated from zstdf EAV Parquet.</p>
+      <p class="subtitle">Parts merge by valid wafer + positive PRR X/Y; otherwise by lot + positive PTR X/Y. Unresolved attempts stay separate. Yield uses all-pass merging; it is not final-retest yield.</p>
     </div>
     <div class="controls">
       <input id="search" type="search" placeholder="Filter tests or groups">
@@ -1742,24 +1767,39 @@ mod tests {
     }
 
     #[test]
-    fn part_identity_is_source_scoped_and_delimiter_safe() {
-        let mut a = row("C", 0, true, 1, 1.0, true);
-        a.lot_id = "A|B".into();
-        a.wafer_id = Some("D".into());
+    fn resolved_coordinates_merge_across_sources_and_sites() {
+        let a = row("P1", 0, true, 1, 1.0, true);
         let mut b = a.clone();
-        b.lot_id = "A".into();
-        b.wafer_id = Some("B|D".into());
-        assert_ne!(scoped_part_key(&a, "one"), scoped_part_key(&b, "one"));
-        assert_ne!(scoped_part_key(&a, "one"), scoped_part_key(&a, "two"));
+        b.part_id = "DIFFERENT".into();
+        b.head_num = 2;
+        b.site_num = 9;
+        b.lot_id = "ANOTHER".into();
+        b.part_sequence = 20;
+        assert_eq!(scoped_part_key(&a, "one"), scoped_part_key(&b, "two"));
         let mut all = AnalysisAccumulator::default();
         all.push_scoped(&a, "one");
-        all.push_scoped(&a, "one");
-        all.push_scoped(&a, "two");
-        assert_eq!(all.parts.len(), 2);
-        a.wafer_id = None;
-        b = a.clone();
-        b.wafer_id = Some(String::new());
+        all.push_scoped(&b, "two");
+        assert_eq!(all.parts.len(), 1);
+    }
+
+    #[test]
+    fn unresolved_attempts_are_not_merged_by_repeated_part_id() {
+        let mut a = row("P1", 0, true, 1, 1.0, true);
+        a.part_merge_key = None;
+        let mut b = a.clone();
+        b.part_sequence += 1;
         assert_ne!(scoped_part_key(&a, "one"), scoped_part_key(&b, "one"));
+        assert_ne!(scoped_part_key(&a, "one"), scoped_part_key(&a, "two"));
+        let data = analyze_rows(&[a, b], &DashboardOptions::default());
+        assert_eq!(data.kpis.parts, 2);
+        assert_eq!(
+            data.data_quality
+                .iter()
+                .find(|q| q.label == "unresolved coordinate identity")
+                .unwrap()
+                .fail,
+            2
+        );
     }
 
     fn row(
@@ -1770,14 +1810,21 @@ mod tests {
         result: f32,
         test_pass: bool,
     ) -> TestRow {
+        let coordinate = part_id.trim_start_matches('P').parse::<i16>().unwrap_or(1);
         TestRow {
+            part_sequence: coordinate as u64,
+            part_merge_key: stdf_arrow::identity::wafer_key(
+                Some("W1"),
+                Some(coordinate),
+                Some(coordinate + 1),
+            ),
             lot_id: "LOT1".to_string(),
             wafer_id: Some("W1".to_string()),
             part_id: part_id.to_string(),
             head_num: 1,
             site_num,
-            x_coord: Some(site_num as i16),
-            y_coord: Some(site_num as i16 + 1),
+            x_coord: Some(coordinate),
+            y_coord: Some(coordinate + 1),
             hard_bin: if part_pass { 1 } else { 9 },
             soft_bin: if part_pass { 1 } else { 99 },
             part_pass,

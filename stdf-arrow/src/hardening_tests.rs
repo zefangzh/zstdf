@@ -28,6 +28,72 @@ fn interleaved_multisite_parts_keep_tests_with_correct_sites() {
 }
 
 #[test]
+fn coordinate_fallback_is_attempt_local_when_sites_are_interleaved() {
+    let coordinate = |num, site, name: &str, value| {
+        let mut result = ptr(num, 1, site, value, 0);
+        result.test_txt = Some(name.into());
+        StdfRecord::Ptr(result)
+    };
+    let mut records = vec![
+        StdfRecord::Mir(mir("LOT1")),
+        StdfRecord::Wir(wir("bad-wafer")),
+        StdfRecord::Pir(pir(1, 0)),
+        StdfRecord::Pir(pir(1, 1)),
+        coordinate(1, 0, "coordinate_x", 10.0),
+        coordinate(1, 1, "coordinate_x", 11.0),
+        coordinate(2, 1, "Y_INDEX", 21.0),
+        coordinate(2, 0, "Y_INDEX", 20.0),
+        StdfRecord::Prr(prr(1, 1, Some("SAME"), 0)),
+        StdfRecord::Prr(prr(1, 0, Some("SAME"), 0)),
+    ];
+    records.extend([
+        StdfRecord::Pir(pir(1, 0)),
+        coordinate(1, 0, "coordinate_x", 12.0),
+        coordinate(2, 0, "Y_INDEX", 20.0),
+        StdfRecord::Prr(prr(1, 0, Some("SAME"), 0)),
+    ]);
+    // Both conversion paths must resolve the same identities, even though
+    // the bounded path emits one part per batch in PRR completion order.
+    let ordinary = records_to_batches(records.clone().into_iter().map(Ok), 100).unwrap();
+    let bounded: Vec<_> = crate::bounded_record_batches(
+        records.into_iter().map(Ok),
+        crate::BatchLimits {
+            max_pending_tests: 100,
+            max_memory_bytes: 1024 * 1024,
+        },
+    )
+    .unwrap()
+    .collect::<Result<_, _>>()
+    .unwrap();
+    for batches in [ordinary, bounded] {
+        let mut actual = Vec::new();
+        for batch in batches {
+            let keys = as_string(&batch, crate::schema::PART_MERGE_KEY);
+            let sequences = batch
+                .column(crate::schema::PART_SEQUENCE)
+                .as_any()
+                .downcast_ref::<arrow::array::UInt64Array>()
+                .unwrap();
+            for index in 0..batch.num_rows() {
+                actual.push((keys.value(index).to_string(), sequences.value(index)));
+            }
+        }
+        let expected: Vec<_> = [
+            (r#"["lot-ptr","LOT1",11,21]"#, 2),
+            (r#"["lot-ptr","LOT1",10,20]"#, 1),
+            (r#"["lot-ptr","LOT1",12,20]"#, 3),
+        ]
+        .into_iter()
+        .flat_map(|(key, sequence)| {
+            let item = (key.to_string(), sequence);
+            [item.clone(), item]
+        })
+        .collect();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
 fn open_parts_keep_starting_lot_and_wafer_across_context_changes() {
     let records = vec![
         StdfRecord::Mir(mir("L1")),
@@ -143,7 +209,7 @@ fn prr_without_tests_finishes_zero_row_batch() {
     let batch = builder.finish().unwrap();
 
     assert_eq!(batch.num_rows(), 0);
-    assert_eq!(batch.num_columns(), 19);
+    assert_eq!(batch.num_columns(), 21);
 }
 
 #[test]

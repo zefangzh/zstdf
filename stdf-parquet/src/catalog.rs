@@ -48,7 +48,7 @@ impl Default for DatasetCatalog {
     fn default() -> Self {
         Self {
             version: 1,
-            schema_version: "eav-v1".into(),
+            schema_version: stdf_arrow::schema::SCHEMA_VERSION.into(),
             revision: 0,
             sources: BTreeMap::new(),
             run: RunStatus {
@@ -102,8 +102,8 @@ fn read_catalog(root: &Path, max_bytes: usize) -> Result<DatasetCatalog> {
     }
     let catalog: DatasetCatalog = serde_json::from_reader(file.take(max_bytes as u64 + 1))
         .map_err(|e| invalid(e.to_string()))?;
-    if catalog.version != 1 || catalog.schema_version != "eav-v1" {
-        return Err(invalid("unsupported catalog/schema version"));
+    if catalog.version != 1 || catalog.schema_version != stdf_arrow::schema::SCHEMA_VERSION {
+        return Err(invalid("unsupported catalog/schema version; reconvert source STDF files into a new eav-v2 dataset directory"));
     }
     Ok(catalog)
 }
@@ -208,8 +208,9 @@ pub fn convert_dataset(
         failures: Vec::new(),
     };
     publish(root, &mut catalog, max_bytes)?;
-    let options_sha =
-        sha256(format!("catalog-fragments-v2|eav-v1|{keys:?}|{options:?}").as_bytes());
+    let options_sha = sha256(
+        format!("catalog-fragments-v3|eav-v2|coordinate-v1|{keys:?}|{options:?}").as_bytes(),
+    );
     let objects = root.join("objects");
     fs::create_dir_all(&objects)?;
     if !fs::canonicalize(&objects)?.starts_with(fs::canonicalize(root)?) {
@@ -354,6 +355,15 @@ impl Write for CappedBuffer {
     }
 }
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    atomic_write_checked(path, bytes, || Ok(()))
+}
+
+/// Stage and sync the complete output, then check cancellation before committing.
+pub fn atomic_write_checked(
+    path: &Path,
+    bytes: &[u8],
+    before_replace: impl FnOnce() -> std::io::Result<()>,
+) -> Result<()> {
     let temp = crate::temp_output_path(path);
     let mut owned = false;
     let result = (|| {
@@ -366,6 +376,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         file.sync_all()?;
         drop(file);
         inject_failure(2)?;
+        before_replace()?;
         replace_file(&temp, path)
     })();
     if result.is_err() && owned {

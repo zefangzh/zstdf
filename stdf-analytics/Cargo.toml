@@ -1,0 +1,6 @@
+[package]
+name = "stdf-analytics"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

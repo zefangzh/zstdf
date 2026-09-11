@@ -1,0 +1,11 @@
+{
+  "flow_id": "synthetic-example",
+  "version": "1",
+  "steps": [
+    {"id": "stage-a", "required": true, "stop_on_fail": true,
+     "matches": [{"job_nam": "DEMO_A", "job_rev": "1"}, {"job_nam": "DEMO_A", "job_rev": "2"}]},
+    {"id": "stage-b", "required": true, "matches": [{"job_nam": "DEMO_B"}]},
+    {"id": "stage-c", "required": true, "matches": [{"job_nam": "DEMO_C"}]},
+    {"id": "optional-check", "required": false, "matches": [{"job_nam": "DEMO_OPTIONAL"}]}
+  ]
+}

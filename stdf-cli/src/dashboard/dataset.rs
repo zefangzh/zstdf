@@ -66,7 +66,8 @@ pub fn generate_dataset_dashboard(
                         + row.part_id.len()
                         + row.test_txt.as_ref().map_or(0, String::len)
                         + row.test_type.len()
-                        + row.units.as_ref().map_or(0, String::len);
+                        + row.units.as_ref().map_or(0, String::len)
+                        + row.part_merge_key.as_ref().map_or(0, String::len);
                     // Cumulative conservative reservation bounds both all-lot and per-lot maps.
                     charged = charged
                         .saturating_add(8192)
@@ -169,6 +170,48 @@ mod tests {
                 ErrorPolicy::FailFast,
             )
             .unwrap();
+        }
+        fn coordinate_input(
+            &self,
+            name: &str,
+            lot: &str,
+            wafer: &str,
+            site: u8,
+            prr_xy: (i16, i16),
+            samples: &[(f32, f32)],
+        ) -> PathBuf {
+            let path = self.input(name, lot, 0);
+            let mut bytes = fs::read(&path).unwrap();
+            // Keep FAR/MIR only; replace the helper's empty PIR/PRR.
+            bytes.truncate(bytes.len() - 6 - 13);
+            let mut wir = vec![1, 255, 0, 0, 0, 0, wafer.len() as u8];
+            wir.extend_from_slice(wafer.as_bytes());
+            append(&mut bytes, 2, 10, &wir);
+            for &(x, y) in samples {
+                append(&mut bytes, 5, 10, &[1, site]);
+                // The regular measurement precedes X/Y. With one row per
+                // fragment it must still carry the eventual resolved identity.
+                for (number, name, value) in [
+                    (1_u32, "Voltage", 1.0),
+                    (2, "Y_INDEX", y),
+                    (3, "coordinate_x", x),
+                ] {
+                    let mut ptr = number.to_le_bytes().to_vec();
+                    ptr.extend_from_slice(&[1, site, 0, 0]);
+                    ptr.extend_from_slice(&value.to_le_bytes());
+                    ptr.push(name.len() as u8);
+                    ptr.extend_from_slice(name.as_bytes());
+                    append(&mut bytes, 15, 10, &ptr);
+                }
+                let mut prr = vec![1, site, 0, 3, 0, 1, 0, 1, 0];
+                prr.extend_from_slice(&prr_xy.0.to_le_bytes());
+                prr.extend_from_slice(&prr_xy.1.to_le_bytes());
+                prr.extend_from_slice(&0_u32.to_le_bytes());
+                prr.extend_from_slice(&[4, b'S', b'A', b'M', b'E']);
+                append(&mut bytes, 5, 20, &prr);
+            }
+            fs::write(&path, bytes).unwrap();
+            path
         }
         fn dashboard(&self, limits: DatasetLimits) -> Result<DashboardSummary, Box<dyn Error>> {
             generate_dataset_dashboard(
@@ -314,5 +357,140 @@ mod tests {
         assert!(!fs::read_to_string(f.0.join("out.html"))
             .unwrap()
             .contains("<script>alert(1)"));
+    }
+
+    #[test]
+    fn ptr_fallback_survives_fragment_splits_repeated_ids_and_source_site_changes() {
+        let f = Fixture::new();
+        let samples = [(10.0, 20.0), (11.0, 20.0)];
+        let first = f.coordinate_input("a.stdf", "L1", "bad-wafer", 0, (1, 2), &samples);
+        let second = f.coordinate_input("b.stdf", "L1", "W2", 1, (0, 2), &samples);
+        f.convert(&[first.clone(), second]);
+        let summary = f
+            .dashboard(DatasetLimits {
+                max_parts: 2,
+                ..limits()
+            })
+            .unwrap();
+        assert_eq!((summary.rows, summary.parts), (12, 2));
+        assert_eq!(f.payload()["all"]["identity_rule_version"], "coordinate-v1");
+        let catalog = verify_catalog(&f.0.join("dataset")).unwrap();
+        assert_eq!(catalog.schema_version, "eav-v2");
+        assert_eq!(
+            catalog
+                .sources
+                .values()
+                .map(|s| s.fragments.len())
+                .sum::<usize>(),
+            12
+        );
+
+        let reader = stdf_io::StdfReader::open(&first).unwrap();
+        let parquet = f.0.join("single.parquet");
+        stdf_parquet::records_to_parquet_path(reader.records(), &parquet, 1).unwrap();
+        let single = analyze_parquet(&parquet, &DashboardOptions::default()).unwrap();
+        assert_eq!((single.kpis.rows, single.kpis.parts), (6, 2));
+
+        // Equal PTR coordinates in a different lot must not merge.
+        let third = f.coordinate_input("c.stdf", "L2", "bad-wafer", 2, (-1, 2), &samples);
+        f.convert(&[third]);
+        assert_eq!(f.dashboard(limits()).unwrap().parts, 4);
+    }
+
+    #[test]
+    fn primary_coordinate_identity_ignores_source_lot_site_and_ptr_values() {
+        let f = Fixture::new();
+        let a = f.coordinate_input("a.stdf", "L1", "W1", 0, (3, 4), &[(10.0, 20.0)]);
+        let b = f.coordinate_input("b.stdf", "L2", "W1", 1, (3, 4), &[(99.0, 88.0)]);
+        let c = f.coordinate_input("c.stdf", "L1", "W2", 0, (3, 4), &[(10.0, 20.0)]);
+        f.convert(&[a, b, c]);
+        assert_eq!(f.dashboard(limits()).unwrap().parts, 2);
+    }
+
+    #[test]
+    fn invalid_fallback_keeps_each_attempt_and_preserves_original_prr_fields() {
+        let f = Fixture::new();
+        let source = f.coordinate_input(
+            "a.stdf",
+            "L1",
+            "bad-wafer",
+            0,
+            (-1, 0),
+            &[(0.0, 20.0), (0.0, 20.0)],
+        );
+        f.convert(&[source]);
+        assert_eq!(f.dashboard(limits()).unwrap().parts, 2);
+        let payload = f.payload();
+        let quality = payload["all"]["data_quality"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|q| q["label"] == "unresolved coordinate identity")
+            .unwrap();
+        assert_eq!(quality["fail"], 6);
+        let catalog = verify_catalog(&f.0.join("dataset")).unwrap();
+        for fragment in &catalog.sources.values().next().unwrap().fragments {
+            let reader = ParquetRecordBatchReaderBuilder::try_new(
+                File::open(f.0.join("dataset").join(&fragment.path)).unwrap(),
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+            for batch in reader {
+                for row in rows_from_batch(&batch.unwrap()).unwrap() {
+                    assert_eq!(row.wafer_id.as_deref(), Some("bad-wafer"));
+                    assert_eq!((row.x_coord, row.y_coord), (Some(-1), Some(0)));
+                    assert!(row.part_merge_key.is_none());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn empty_legacy_parquet_requires_reconversion_and_preserves_html() {
+        let f = Fixture::new();
+        let path = f.0.join("legacy.parquet");
+        let schema = std::sync::Arc::new(arrow::datatypes::Schema::new(
+            stdf_arrow::eav_schema().fields()[..19].to_vec(),
+        ));
+        parquet::arrow::ArrowWriter::try_new(File::create(&path).unwrap(), schema, None)
+            .unwrap()
+            .close()
+            .unwrap();
+        let original = fs::read(&path).unwrap();
+        let output = f.0.join("out.html");
+        fs::write(&output, "previous").unwrap();
+        let error = generate_dashboard(&path, &output, DashboardOptions::default()).unwrap_err();
+        assert!(error.to_string().contains("reconvert"));
+        assert_eq!(fs::read_to_string(output).unwrap(), "previous");
+        assert_eq!(fs::read(path).unwrap(), original);
+    }
+
+    #[test]
+    fn legacy_catalog_is_rejected_without_changing_catalog_or_html() {
+        let f = Fixture::new();
+        let source = f.input("a.stdf", "L1", 1);
+        f.convert(&[source.clone()]);
+        let path = f.0.join("dataset/_catalog.json");
+        let legacy = fs::read_to_string(&path)
+            .unwrap()
+            .replace("eav-v2", "eav-v1");
+        fs::write(&path, &legacy).unwrap();
+        fs::write(f.0.join("out.html"), "previous").unwrap();
+        let error = f.dashboard(limits()).unwrap_err().to_string();
+        assert!(error.contains("reconvert"));
+        assert!(convert_dataset(
+            &[source],
+            &f.0.join("dataset"),
+            &[],
+            &FragmentOptions::default(),
+            ErrorPolicy::FailFast
+        )
+        .is_err());
+        assert_eq!(fs::read_to_string(path).unwrap(), legacy);
+        assert_eq!(
+            fs::read_to_string(f.0.join("out.html")).unwrap(),
+            "previous"
+        );
     }
 }

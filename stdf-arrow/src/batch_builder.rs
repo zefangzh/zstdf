@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use arrow::array::{
     ArrayRef, BooleanBuilder, Float32Builder, Int16Builder, StringBuilder, UInt16Builder,
-    UInt32Builder, UInt8Builder,
+    UInt32Builder, UInt64Builder, UInt8Builder,
 };
 use arrow::record_batch::RecordBatch;
 
@@ -72,8 +72,13 @@ pub(crate) fn build_batch(parts: &[PartResult]) -> RecordBatch {
     let mut hi_limit = Float32Builder::with_capacity(rows);
     let mut units = StringBuilder::with_capacity(rows, rows * 4);
     let mut test_time_ms = UInt32Builder::with_capacity(rows);
+    let mut part_sequence = UInt64Builder::with_capacity(rows);
+    let mut part_merge_key = StringBuilder::with_capacity(rows, rows * 32);
 
     for part in parts {
+        // Resolve once at PRR, after all PTRs for this attempt are available.
+        // Repeat the result so fragments can be read in any order independently.
+        let merge_key = crate::identity::part_merge_key(part);
         for test in &part.tests {
             lot_id.append_value(&part.lot_id);
             append_opt_str(&mut wafer_id, part.wafer_id.as_deref());
@@ -94,6 +99,8 @@ pub(crate) fn build_batch(parts: &[PartResult]) -> RecordBatch {
             append_opt_f32(&mut hi_limit, test.hi_limit);
             append_opt_str(&mut units, test.units.as_deref());
             append_opt_u32(&mut test_time_ms, part.test_time_ms);
+            part_sequence.append_value(part.part_sequence);
+            append_opt_str(&mut part_merge_key, merge_key.as_deref());
         }
     }
 
@@ -119,6 +126,8 @@ pub(crate) fn build_batch(parts: &[PartResult]) -> RecordBatch {
             Arc::new(hi_limit.finish()) as ArrayRef,
             Arc::new(units.finish()) as ArrayRef,
             Arc::new(test_time_ms.finish()) as ArrayRef,
+            Arc::new(part_sequence.finish()) as ArrayRef,
+            Arc::new(part_merge_key.finish()) as ArrayRef,
         ],
     )
     .expect("EAV builders must match the declared schema")

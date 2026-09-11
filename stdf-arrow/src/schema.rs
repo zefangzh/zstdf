@@ -21,6 +21,9 @@ pub const LO_LIMIT: usize = 15;
 pub const HI_LIMIT: usize = 16;
 pub const UNITS: usize = 17;
 pub const TEST_TIME_MS: usize = 18;
+pub const PART_SEQUENCE: usize = 19;
+pub const PART_MERGE_KEY: usize = 20;
+pub const SCHEMA_VERSION: &str = "eav-v2";
 
 /// Long-format Arrow schema: one row per test result with part context repeated.
 pub fn eav_schema() -> SchemaRef {
@@ -44,5 +47,7 @@ pub fn eav_schema() -> SchemaRef {
         Field::new("hi_limit", DataType::Float32, true),
         Field::new("units", DataType::Utf8, true),
         Field::new("test_time_ms", DataType::UInt32, true),
+        Field::new("part_sequence", DataType::UInt64, false),
+        Field::new("part_merge_key", DataType::Utf8, true),
     ]))
 }

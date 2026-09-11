@@ -6,3 +6,6 @@
 /sanity_report.txt
 /batch_report.txt
 *.pdb
+/trace.html
+/examples/traceability/generated/demo.html
+/examples/traceability/generated/browser-smoke.png

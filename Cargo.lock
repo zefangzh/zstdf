@@ -1342,10 +1342,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "199905e6153d6405f9728fe44daace35f8f837bbf830bb6e85fbd5828709a886"
 
 [[package]]
+name = "stdf-analytics"
+version = "0.1.0"
+
+[[package]]
 name = "stdf-arrow"
 version = "0.1.0"
 dependencies = [
  "arrow",
+ "serde_json",
  "stdf-core",
  "thiserror",
 ]
@@ -1363,9 +1368,13 @@ version = "0.1.0"
 dependencies = [
  "arrow",
  "clap",
+ "flate2",
  "parquet",
  "rayon",
+ "serde",
  "serde_json",
+ "sha2",
+ "stdf-analytics",
  "stdf-arrow",
  "stdf-ascii",
  "stdf-core",

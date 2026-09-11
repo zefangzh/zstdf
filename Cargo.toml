@@ -8,6 +8,7 @@ members = [
     "stdf-cli",
     "stdf-validate",
     "stdf-ascii",
+    "stdf-analytics",
 ]
 resolver = "2"
 
